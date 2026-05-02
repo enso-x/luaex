@@ -1,0 +1,9 @@
+local test = {}
+
+test.sum = fn(a, b) => a + b
+
+test.name = fn(a, b) => "Name"
+
+test.sum(1, 2) |> print
+
+print(test?.name())

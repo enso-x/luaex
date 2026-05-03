@@ -54,7 +54,15 @@ local pipelineValue = 10 |> add(5) |> double
 check("pipeline call", pipelineValue, 30)
 
 -- Pipeline as a statement.
+local assignedPipeline = 5 |> double
+check("pipeline assignment expression", assignedPipeline, 10)
+
 123 |> print
+"pipeline string statement" |> print
+{1, 2} |> print
+false |> print
+1 + 2 |> print
+"1" .. "2" .. "3" |> print
 
 -- Method pipeline: value |> :method(args) is value:method(args).
 local box = {

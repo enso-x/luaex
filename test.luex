@@ -1,9 +1,75 @@
-local test = {}
+local function check(name, actual, expected)
+    if actual ~= expected then
+        error(name .. ": expected " .. tostring(expected) .. ", got " .. tostring(actual))
+    end
+    print("ok - " .. name .. " = " .. tostring(actual))
+end
 
-test.sum = fn(a, b) => a + b
+-- Compound assignment: +=, -=, *=, /=
+local score = 10
+score += 5
+score -= 3
+score *= 2
+score /= 4
+check("compound assignment", score, 6)
 
-test.name = fn(a, b) => "Name"
+local player = { hp = 100 }
+player.hp -= 25
+check("field compound assignment", player.hp, 75)
 
-test.sum(1, 2) |> print
+-- Nil coalescing: only nil falls back, false is preserved.
+local fallbackName = nil ?? "Unknown"
+local explicitFalse = false ?? true
+check("nil coalescing fallback", fallbackName, "Unknown")
+check("nil coalescing keeps false", explicitFalse, false)
 
-print(test?.name())
+-- Optional chaining: missing fields safely become nil.
+local user = {
+    profile = {
+        name = "Ada",
+        getName = fn() => "Ada Lovelace"
+    }
+}
+local missingUser = nil
+check("optional field", user?.profile?.name, "Ada")
+check("optional missing field", user?.settings?.theme ?? "default", "default")
+check("optional nil receiver", missingUser?.profile?.name ?? "nobody", "nobody")
+check("optional call", user?.profile?.getName?.(), "Ada Lovelace")
+
+-- Lambda expressions.
+local double = value => value * 2
+local sum = fn(a, b) => a + b
+local blockLambda = fn(x) => do
+    local y = x * 2
+    return y + 1
+end
+
+check("single-parameter lambda", double(7), 14)
+check("fn lambda", sum(3, 4), 7)
+check("block lambda", blockLambda(5), 11)
+
+-- Pipeline operator: the left value becomes the first argument.
+local add = fn(a, b) => a + b
+local pipelineValue = 10 |> add(5) |> double
+check("pipeline call", pipelineValue, 30)
+
+-- Pipeline as a statement.
+123 |> print
+
+-- Method pipeline: value |> :method(args) is value:method(args).
+local box = {
+    value = 2,
+    add = fn(self, amount) => do
+        self.value += amount
+        return self
+    end,
+    multiply = fn(self, factor) => do
+        self.value *= factor
+        return self
+    end
+}
+
+box |> :add(3) |> :multiply(4)
+check("method pipeline", box.value, 20)
+
+print("LuaEx feature examples completed.")

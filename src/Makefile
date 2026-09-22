@@ -1,4 +1,4 @@
-# Makefile for building Lua
+# Makefile for building ExLua
 # See ../doc/readme.html for installation and customization instructions.
 
 # == CHANGE THE SETTINGS BELOW TO SUIT YOUR ENVIRONMENT =======================
@@ -41,12 +41,13 @@ LUA_T=	lua
 LUA_O=	lua.o
 
 LUEX_T=	luex
+EXLUA_T=	exlua
 
 LUAC_T=	luac
 LUAC_O=	luac.o
 
 ALL_O= $(BASE_O) $(LUA_O) $(LUAC_O)
-ALL_T= $(LUA_A) $(LUA_T) $(LUEX_T) $(LUAC_T)
+ALL_T= $(LUA_A) $(LUA_T) $(EXLUA_T) $(LUEX_T) $(LUAC_T)
 ALL_A= $(LUA_A)
 
 # Targets start here.
@@ -68,12 +69,15 @@ $(LUA_T): $(LUA_O) $(LUA_A)
 $(LUEX_T): $(LUA_O) $(LUA_A)
 	$(CC) -o $@ $(LDFLAGS) $(LUA_O) $(LUA_A) $(LIBS)
 
+$(EXLUA_T): $(LUA_O) $(LUA_A)
+	$(CC) -o $@ $(LDFLAGS) $(LUA_O) $(LUA_A) $(LIBS)
+
 $(LUAC_T): $(LUAC_O) $(LUA_A)
 	$(CC) -o $@ $(LDFLAGS) $(LUAC_O) $(LUA_A) $(LIBS)
 
 test: $(ALL_T)
 	./$(LUA_T) -v
-	./$(LUEX_T) ../tests/run.lua
+	./$(EXLUA_T) ../tests/run.lua
 
 clean:
 	$(RM) $(ALL_T) $(ALL_O)
@@ -133,9 +137,9 @@ Darwin macos macosx:
 	$(MAKE) $(ALL) SYSCFLAGS="-DLUA_USE_MACOSX -DLUA_USE_READLINE" SYSLIBS="-lreadline"
 
 mingw:
-	$(MAKE) "LUA_A=lua55.dll" "LUA_T=lua.exe" "LUEX_T=luex.exe" \
+	$(MAKE) "LUA_A=lua55.dll" "LUA_T=lua.exe" "LUEX_T=luex.exe" "EXLUA_T=exlua.exe" \
 	"AR=$(CC) -shared -o" "RANLIB=strip --strip-unneeded" \
-	"SYSCFLAGS=-DLUA_BUILD_AS_DLL" "SYSLIBS=" "SYSLDFLAGS=-s" lua.exe luex.exe
+	"SYSCFLAGS=-DLUA_BUILD_AS_DLL" "SYSLIBS=" "SYSLDFLAGS=-s" lua.exe exlua.exe luex.exe
 	$(MAKE) "LUAC_T=luac.exe" luac.exe
 
 posix:

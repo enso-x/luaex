@@ -660,6 +660,79 @@ l_sinline int precallC (lua_State *L, StkId func, unsigned status,
 }
 
 
+/* Fill an omitted parameter. An explicit nil never reaches this helper. */
+static void defaultarg (lua_State *L, LClosure *cl, int param, TValue *value) {
+  int firstdefault = cl->p->numparams - cl->p->numdefaults;
+  if (param < firstdefault)
+    setnilvalue(value);
+  else {
+    if (cl->defaults == NULL)
+      luaG_runerror(L, "default argument values unavailable; "
+                       "dump/load the enclosing chunk instead");
+    if (tagisempty(luaH_getint(cl->defaults, param - firstdefault + 1, value)))
+      setnilvalue(value);
+  }
+}
+
+
+/* Bind against the closure actually being called, never a lexical name.
+   The caller has rooted all input registers, including the descriptor. */
+void luaD_namedargs (lua_State *L, StkId func, int npos, int nnamed) {
+  TValue values[MAX_FSTACK];
+  int slots[MAX_FSTACK];
+  lu_byte seen[MAX_FSTACK] = {0};
+  LClosure *cl;
+  Proto *p;
+  TString *descriptor;
+  const char *name, *end;
+  int i, nout;
+  if (!ttisLclosure(s2v(func)))
+    luaG_runerror(L, "named arguments require a Lua function");
+  cl = clLvalue(s2v(func));
+  p = cl->p;
+  descriptor = tsvalue(s2v(func + 1 + npos + nnamed));
+  name = getstr(descriptor);
+  end = name + tsslen(descriptor);
+  /* Validate first, while all original inputs remain intact. */
+  for (i = 0; i < nnamed; i++) {
+    const char *next = cast(const char *, memchr(name, '\0', end - name));
+    int j, found = -1;
+    if (next == NULL)
+      luaG_runerror(L, "invalid named argument descriptor");
+    for (j = 0; j < p->numparams; j++) {
+      TString *param = p->paramnames[j];
+      if (tsslen(param) == cast_sizet(next - name) &&
+          memcmp(getstr(param), name, next - name) == 0) {
+        if (found >= 0)
+          luaG_runerror(L, "ambiguous parameter name '%s'", name);
+        found = j;
+      }
+    }
+    if (found < 0)
+      luaG_runerror(L, "unknown named argument '%s'", name);
+    if (found < npos || seen[found])
+      luaG_runerror(L, "multiple values for argument '%s'", name);
+    seen[found] = 1;
+    slots[i] = found;
+    name = next + 1;
+  }
+  if (name != end)
+    luaG_runerror(L, "invalid named argument descriptor");
+  nout = (npos > p->numparams) ? npos : p->numparams;
+  checkstackp(L, nout + 1, func);
+  /* No allocations after taking these temporary copies. */
+  for (i = 0; i < nnamed; i++)
+    setobj(L, &values[i], s2v(func + 1 + npos + i));
+  for (i = npos; i < p->numparams; i++) {
+    if (!seen[i])
+      defaultarg(L, cl, i, s2v(func + 1 + i));
+  }
+  for (i = 0; i < nnamed; i++)
+    setobj2s(L, func + 1 + slots[i], &values[i]);
+  L->top.p = func + 1 + nout;
+}
+
+
 /*
 ** Prepare a function for a tail call, building its call info on top
 ** of the current call info. 'narg1' is the number of arguments plus 1
@@ -680,13 +753,17 @@ int luaD_pretailcall (lua_State *L, CallInfo *ci, StkId func,
       int fsize = p->maxstacksize;  /* frame size */
       int nfixparams = p->numparams;
       int i;
-      checkstackp(L, fsize - delta, func);
+      /* Defaults are filled before moving the frame down, so reserve space
+         at the original function position even for hidden varargs. */
+      checkstackp(L, fsize, func);
+      for (; narg1 <= nfixparams; narg1++) {
+        defaultarg(L, clLvalue(s2v(func)), narg1 - 1, s2v(func + narg1));
+        L->top.p = func + narg1 + 1;
+      }
       ci->func.p -= delta;  /* restore 'func' (if vararg) */
       for (i = 0; i < narg1; i++)  /* move down function and arguments */
         setobjs2s(L, ci->func.p + i, func + i);
       func = ci->func.p;  /* moved-down function */
-      for (; narg1 <= nfixparams; narg1++)
-        setnilvalue(s2v(func + narg1));  /* complete missing arguments */
       ci->top.p = func + 1 + fsize;  /* top for new function */
       lua_assert(ci->top.p <= L->stack_last.p);
       ci->u.l.savedpc = p->code;  /* starting point */
@@ -730,10 +807,12 @@ CallInfo *luaD_precall (lua_State *L, StkId func, int nresults) {
       int nfixparams = p->numparams;
       int fsize = p->maxstacksize;  /* frame size */
       checkstackp(L, fsize, func);
+      for (; narg < nfixparams; narg++) {
+        defaultarg(L, clLvalue(s2v(func)), narg, s2v(L->top.p));
+        L->top.p++;
+      }
       L->ci = ci = prepCallInfo(L, func, status, func + 1 + fsize);
       ci->u.l.savedpc = p->code;  /* starting point */
-      for (; narg < nfixparams; narg++)
-        setnilvalue(s2v(L->top.p++));  /* complete missing arguments */
       lua_assert(ci->top.p <= L->stack_last.p);
       return ci;
     }

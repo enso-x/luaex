@@ -1174,9 +1174,11 @@ void luaV_finishOp (lua_State *L) {
 #define luai_threadyield(L)	{lua_unlock(L); lua_lock(L);}
 #endif
 
-/* 'c' is the limit of live values in the stack */
+/* 'c' is the limit of live values in the stack. Keep an offset because
+   HARDMEMTESTS can collect twice and either collection can move the stack. */
 #define checkGC(L,c)  \
-	{ luaC_condGC(L, (savepc(ci), L->top.p = (c)), \
+	{ ptrdiff_t top_ = savestack(L, (c)); \
+          luaC_condGC(L, (savepc(ci), L->top.p = restorestack(L, top_)), \
                          updatetrap(ci)); \
            luai_threadyield(L); }
 
@@ -1959,6 +1961,32 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
           L->oldpc = 1;  /* next opcode will be seen as a "new" line */
         }
         updatebase(ci);  /* function has new base after adjustment */
+        vmbreak;
+      }
+      vmcase(OP_NAMEDARGS) {
+        StkId ra = RA(i);
+        int npos = GETARG_B(i), nnamed = GETARG_C(i);
+        L->top.p = ra + 2 + npos + nnamed;
+        ProtectNT(luaD_namedargs(L, ra, npos, nnamed));
+        vmbreak;
+      }
+      vmcase(OP_SETDEFAULTS) {
+        StkId ra = RA(i);
+        LClosure *closure = clLvalue(s2v(ra));
+        int n = GETARG_C(i), j;
+        Table *defaults;
+        L->top.p = ra + 1;  /* defaults lie below the new closure */
+        savepc(ci);
+        defaults = luaH_new(L);
+        closure->defaults = defaults;
+        luaC_objbarrier(L, closure, defaults);
+        luaH_resizearray(L, defaults, n);
+        for (j = 0; j < n; j++) {
+          TValue *value = s2v(base + GETARG_B(i) + j);
+          obj2arr(defaults, j, value);
+          luaC_barrierback(L, obj2gco(defaults), value);
+        }
+        checkGC(L, ra + 1);
         vmbreak;
       }
       vmcase(OP_EXTRAARG) {

@@ -6,3 +6,4 @@ src/lua
 src/luac
 src/luex
 luac.out
+src/exlua

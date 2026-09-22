@@ -344,6 +344,10 @@ OP_ERRNNIL,/*	A Bx	raise error if R[A] ~= nil (K[Bx - 1] is global name)*/
 
 OP_VARARGPREP,/* 	(adjust varargs)				*/
 
+OP_NAMEDARGS,/* A B C  bind C named values after B positional arguments;
+                       R[A+1+B+C] holds names; set top for the next call */
+OP_SETDEFAULTS,/* A B C capture C default values from R[B] in closure R[A] */
+
 OP_EXTRAARG/*	Ax	extra (larger) argument for previous opcode	*/
 } OpCode;
 

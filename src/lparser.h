@@ -174,6 +174,8 @@ typedef struct FuncState {
   int previousline;  /* last line that was saved in 'lineinfo' */
   int nk;  /* number of elements in 'k' */
   int np;  /* number of elements in 'p' */
+  int pidx;  /* this function's index in its enclosing prototype */
+  int defaultbase;  /* enclosing registers with evaluated parameter defaults */
   int nabslineinfo;  /* number of elements in 'abslineinfo' */
   int firstlocal;  /* index of first local var (in Dyndata array) */
   int firstlabel;  /* index of first label (in 'dyd->label->arr') */

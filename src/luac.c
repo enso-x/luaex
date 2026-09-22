@@ -163,7 +163,7 @@ static const Proto* combine(lua_State* L, int n)
 static int writer(lua_State* L, const void* p, size_t size, void* u)
 {
  UNUSED(L);
- return (fwrite(p,size,1,(FILE*)u)!=1) && (size!=0);
+ return (size!=0) && (fwrite(p,size,1,(FILE*)u)!=1);
 }
 
 static int pmain(lua_State* L)
@@ -329,7 +329,7 @@ static void PrintConstant(const Proto* f, int i)
 
 #define COMMENT		"\t; "
 #define EXTRAARG	GETARG_Ax(code[pc+1])
-#define EXTRAARGC	(EXTRAARG*(MAXARG_C+1))
+#define EXTRAARGC	(EXTRAARG*(MAXARG_vC+1))
 #define ISK		(isk ? "k" : "")
 
 static void PrintCode(const Proto* f)
@@ -340,16 +340,17 @@ static void PrintCode(const Proto* f)
  {
   Instruction i=code[pc];
   OpCode o=GET_OPCODE(i);
+  enum OpMode mode=getOpMode(o);  /* getters assert the instruction format */
   int a=GETARG_A(i);
-  int b=GETARG_B(i);
-  int c=GETARG_C(i);
-  int ax=GETARG_Ax(i);
-  int bx=GETARG_Bx(i);
-  int sb=GETARG_sB(i);
-  int sc=GETARG_sC(i);
-  int vb=GETARG_vB(i);
-  int vc=GETARG_vC(i);
-  int sbx=GETARG_sBx(i);
+  int b=(mode==iABC) ? GETARG_B(i) : 0;
+  int c=(mode==iABC) ? GETARG_C(i) : 0;
+  int ax=(mode==iAx) ? GETARG_Ax(i) : 0;
+  int bx=(mode==iABx) ? GETARG_Bx(i) : 0;
+  int sb=sC2int(b);
+  int sc=sC2int(c);
+  int vb=(mode==ivABC) ? GETARG_vB(i) : 0;
+  int vc=(mode==ivABC) ? GETARG_vC(i) : 0;
+  int sbx=(mode==iAsBx) ? GETARG_sBx(i) : 0;
   int isk=GETARG_k(i);
   int line=luaG_getfuncline(f,pc);
   printf("\t%d\t",pc+1);
@@ -636,7 +637,7 @@ static void PrintCode(const Proto* f)
 	break;
    case OP_SETLIST:
 	printf("%d %d %d%s",a,vb,vc,ISK);
-	if (isk) printf(COMMENT "%d",c+EXTRAARGC);
+	if (isk) printf(COMMENT "%d",vc+EXTRAARGC);
 	break;
    case OP_CLOSURE:
 	printf("%d %d",a,bx);
@@ -657,6 +658,10 @@ static void PrintCode(const Proto* f)
 	break;
    case OP_VARARGPREP:
 	printf("%d",a);
+	break;
+   case OP_NAMEDARGS:
+   case OP_SETDEFAULTS:
+	printf("%d %d %d",a,b,c);
 	break;
    case OP_EXTRAARG:
 	printf("%d",ax);

@@ -27,7 +27,7 @@ check("nil coalescing keeps false", explicitFalse, false)
 local user = {
     profile = {
         name = "Ada",
-        getName = fn() => "Ada Lovelace"
+        getName = () => "Ada Lovelace"
     }
 }
 local missingUser = nil
@@ -38,18 +38,18 @@ check("optional call", user?.profile?.getName?.(), "Ada Lovelace")
 
 -- Lambda expressions.
 local double = value => value * 2
-local sum = fn(a, b) => a + b
-local blockLambda = fn(x) => do
+local sum = (a, b) => a + b
+local blockLambda = (x) => do
     local y = x * 2
     return y + 1
 end
 
 check("single-parameter lambda", double(7), 14)
-check("fn lambda", sum(3, 4), 7)
+check("parenthesized lambda", sum(3, 4), 7)
 check("block lambda", blockLambda(5), 11)
 
 -- Pipeline operator: the left value becomes the first argument.
-local add = fn(a, b) => a + b
+local add = (a, b) => a + b
 local pipelineValue = 10 |> add(5) |> double
 check("pipeline call", pipelineValue, 30)
 
@@ -67,11 +67,11 @@ false |> print
 -- Method pipeline: value |> :method(args) is value:method(args).
 local box = {
     value = 2,
-    add = fn(self, amount) => do
+    add = (self, amount) => do
         self.value += amount
         return self
     end,
-    multiply = fn(self, factor) => do
+    multiply = (self, factor) => do
         self.value *= factor
         return self
     end

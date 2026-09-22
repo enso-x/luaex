@@ -60,13 +60,18 @@ static const char *const luaX_tokens [] = {
 static l_noret lexerror (LexState *ls, const char *msg, int token);
 
 
-static int sourceisluex (TString *source) {
+static int sourceisextended (TString *source) {
   const char *s = getstr(source);
   size_t len;
-  if (*s == '@')  /* file names are prefixed with '@' */
+  int isfile = (*s == '@');
+  if (isfile)  /* file names are prefixed with '@' */
     s++;
   len = strlen(s);
-  return (len >= 5 && strcmp(s + len - 5, ".luex") == 0);
+  if (isfile)
+    return (len >= 5 && strcmp(s + len - 5, ".luex") == 0);
+  /* Command-line, stdin, and dynamically loaded strings retain LuaEx
+     syntax. A chunk name ending in .lua explicitly requests ordinary Lua. */
+  return !(len >= 4 && strcmp(s + len - 4, ".lua") == 0);
 }
 
 
@@ -133,7 +138,8 @@ static l_noret lexerror (LexState *ls, const char *msg, int token) {
 
 
 static int extendedtoken (LexState *ls, int token) {
-  UNUSED(ls);
+  if (!ls->extended)
+    lexerror(ls, "LuaEx syntax requires a .luex source", token);
   return token;
 }
 
@@ -201,8 +207,7 @@ void luaX_setinput (lua_State *L, LexState *ls, ZIO *z, TString *source,
   ls->linenumber = 1;
   ls->lastline = 1;
   ls->source = source;
-  ls->extended = sourceisluex(source);
-  ls->hadpipeline = 0;
+  ls->extended = sourceisextended(source);
   /* all three strings here ("_ENV", "break", "global") were fixed,
      so they cannot be collected */
   ls->envn = luaS_newliteral(L, LUA_ENV);  /* get env string */

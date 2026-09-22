@@ -62,7 +62,9 @@ typedef struct BlockCnt {
 ** prototypes for recursive non-terminal functions
 */
 static void statement (LexState *ls);
-static void expr (LexState *ls, expdesc *v);
+static int expr (LexState *ls, expdesc *v);
+static void lambdaexp (LexState *ls, expdesc *e, TString *param,
+                       int vararg, int line);
 
 
 static l_noret error_expected (LexState *ls, int token) {
@@ -1192,12 +1194,49 @@ static void funcargs (LexState *ls, expdesc *f) {
 */
 
 
+static void varargexp (LexState *ls, expdesc *v) {
+  FuncState *fs = ls->fs;
+  check_condition(ls, isvararg(fs->f),
+                  "cannot use '...' outside a vararg function");
+  init_exp(v, VVARARG, luaK_codeABC(fs, OP_VARARG, 0, fs->f->numparams, 1));
+}
+
+
 static void primaryexp (LexState *ls, expdesc *v) {
   /* primaryexp -> NAME | '(' expr ')' */
   switch (ls->t.token) {
     case '(': {
       int line = ls->linenumber;
       luaX_next(ls);
+      if (ls->extended) {
+        /* Empty/multiple parameter lists cannot be ordinary Lua expressions.
+           Reuse parlist so parameter limits are checked before allocation. */
+        if (ls->t.token == ')' ||
+            (ls->t.token == TK_NAME && luaX_lookahead(ls) == ',') ||
+            (ls->t.token == TK_DOTS && luaX_lookahead(ls) == TK_NAME)) {
+          lambdaexp(ls, v, NULL, 0, line);
+          return;
+        }
+        /* (name) and (...) need one more token to distinguish a lambda
+           from a parenthesized expression. Resolve the name only afterwards. */
+        if ((ls->t.token == TK_NAME || ls->t.token == TK_DOTS) &&
+            luaX_lookahead(ls) == ')') {
+          int vararg = (ls->t.token == TK_DOTS);
+          TString *param = vararg ? NULL : ls->t.seminfo.ts;
+          luaX_next(ls);  /* name or '...' */
+          luaX_next(ls);  /* ')' */
+          if (ls->t.token == TK_ARROW)
+            lambdaexp(ls, v, param, vararg, line);
+          else {
+            if (vararg)
+              varargexp(ls, v);
+            else
+              buildvar(ls, param, v);
+            luaK_dischargevars(ls->fs, v);
+          }
+          return;
+        }
+      }
       expr(ls, v);
       check_match(ls, ')', '(', line);
       luaK_dischargevars(ls->fs, v);
@@ -1214,15 +1253,17 @@ static void primaryexp (LexState *ls, expdesc *v) {
 }
 
 
-static void suffixedexp (LexState *ls, expdesc *v) {
+static int suffixedexp (LexState *ls, expdesc *v) {
   /* suffixedexp ->
        primaryexp { '.' NAME | '[' exp ']' | ':' NAME funcargs | funcargs } */
   FuncState *fs = ls->fs;
+  int iscall = 0;
   primaryexp(ls, v);
   for (;;) {
     switch (ls->t.token) {
       case '.': {  /* fieldsel */
         fieldsel(ls, v);
+        iscall = 0;
         break;
       }
       case TK_QDOT: {  /* optional field selection or optional call */
@@ -1232,6 +1273,7 @@ static void suffixedexp (LexState *ls, expdesc *v) {
           expdesc key;
           codename(ls, &key);
           luaK_optionalindex(fs, v, &key);
+          iscall = 0;
         }
         else if (ls->t.token == '(') {
           int reg;
@@ -1242,6 +1284,7 @@ static void suffixedexp (LexState *ls, expdesc *v) {
           luaK_patchtohere(fs, niljump);
           init_exp(v, VNONRELOC, reg);
           fs->freereg = cast_byte(reg + 1);
+          iscall = 1;
         }
         else
           luaX_syntaxerror(ls, "<name> or function arguments expected");
@@ -1252,6 +1295,7 @@ static void suffixedexp (LexState *ls, expdesc *v) {
         luaK_exp2anyregup(fs, v);
         yindex(ls, &key);
         luaK_indexed(fs, v, &key);
+        iscall = 0;
         break;
       }
       case ':': {  /* ':' NAME funcargs */
@@ -1260,14 +1304,16 @@ static void suffixedexp (LexState *ls, expdesc *v) {
         codename(ls, &key);
         luaK_self(fs, v, &key);
         funcargs(ls, v);
+        iscall = 1;
         break;
       }
       case '(': case TK_STRING: case '{' /*}*/: {  /* funcargs */
         luaK_exp2nextreg(fs, v);
         funcargs(ls, v);
+        iscall = 1;
         break;
       }
-      default: return;
+      default: return iscall;
     }
   }
 }
@@ -1301,8 +1347,8 @@ static void pipelineargs (LexState *ls, expdesc *f, expdesc *first) {
   expdesc args;
   int base, nparams, firstreg;
   int line = ls->linenumber;
-  luaK_exp2nextreg(fs, first);
-  firstreg = fs->freereg - 1;
+  lua_assert(first->k == VNONRELOC);
+  firstreg = first->u.info;  /* protected before parsing the callee */
   luaK_exp2nextreg(fs, f);
   luaK_reserveregs(fs, 1);
   luaK_codeABC(fs, OP_MOVE, fs->freereg - 1, firstreg, 0);
@@ -1337,7 +1383,6 @@ static void pipelineargs (LexState *ls, expdesc *f, expdesc *first) {
 
 static void pipeline (LexState *ls, expdesc *v) {
   expdesc f;
-  ls->hadpipeline = 1;
   luaX_next(ls);  /* skip '|>' */
   if (testnext(ls, ':')) {
     expdesc key;
@@ -1346,32 +1391,39 @@ static void pipeline (LexState *ls, expdesc *v) {
     funcargs(ls, v);
   }
   else {
+    luaK_exp2nextreg(ls->fs, v);  /* evaluate LHS before callee temporaries */
     calleeexp(ls, &f);
     pipelineargs(ls, &f, v);
   }
 }
 
 
-static void lambdaexp (LexState *ls, expdesc *e, TString **params,
-                       int nparams, int vararg, int line) {
+static void lambdaexp (LexState *ls, expdesc *e, TString *param,
+                       int vararg, int line) {
   FuncState new_fs;
   FuncState *fs;
   BlockCnt bl;
-  int i;
   new_fs.f = addprototype(ls);
   new_fs.f->linedefined = line;
   open_func(ls, &new_fs, &bl);
   fs = ls->fs;
-  for (i = 0; i < nparams; i++)
-    new_localvar(ls, params[i]);
-  adjustlocalvars(ls, nparams);
-  fs->f->numparams = cast_byte(fs->nactvar);
-  if (vararg) {
+  if (param != NULL) {  /* name => expr, or (name) => expr */
+    new_localvar(ls, param);
+    adjustlocalvars(ls, 1);
+    fs->f->numparams = 1;
+    luaK_reserveregs(fs, 1);
+  }
+  else if (vararg) {  /* (...) => expr */
     setvararg(fs);
     new_localvarliteral(ls, "(vararg table)");
     adjustlocalvars(ls, 1);
+    luaK_reserveregs(fs, 1);
   }
-  luaK_reserveregs(fs, fs->nactvar);
+  else {  /* '(' was consumed by primaryexp */
+    parlist(ls);
+    check_match(ls, ')', '(', line);
+  }
+  checknext(ls, TK_ARROW);
   if (testnext(ls, TK_DO)) {
     statlist(ls);
     new_fs.f->lastlinedefined = ls->linenumber;
@@ -1390,73 +1442,24 @@ static void lambdaexp (LexState *ls, expdesc *e, TString **params,
 }
 
 
-static int fnparamlist (LexState *ls, TString **params) {
-  int nparams = 0;
-  int vararg = 0;
-  checknext(ls, '(');
-  if (ls->t.token != ')') {
-    do {
-      if (ls->t.token == TK_NAME) {
-        params[nparams++] = str_checkname(ls);
-        luaY_checklimit(ls->fs, nparams, MAXVARS, "parameters");
-      }
-      else if (ls->t.token == TK_DOTS) {
-        vararg = 1;
-        luaX_next(ls);
-      }
-      else
-        luaX_syntaxerror(ls, "<name> or '...' expected");
-    } while (!vararg && testnext(ls, ','));
-  }
-  checknext(ls, ')');
-  checknext(ls, TK_ARROW);
-  return vararg ? -nparams - 1 : nparams;
-}
-
-
-static void fnlambdaexp (LexState *ls, expdesc *e) {
-  TString *params[MAXVARS];
-  int line = ls->linenumber;
-  int nparams, vararg = 0;
-  luaX_next(ls);  /* skip contextual 'fn' */
-  nparams = fnparamlist(ls, params);
-  if (nparams < 0) {
-    nparams = -nparams - 1;
-    vararg = 1;
-  }
-  lambdaexp(ls, e, params, nparams, vararg, line);
-}
-
-
-static int isfnname (LexState *ls) {
-  return (ls->t.token == TK_NAME &&
-          strcmp(getstr(ls->t.seminfo.ts), "fn") == 0 &&
-          luaX_lookahead(ls) == '(');
-}
-
-
 static int singleparamlambda (LexState *ls, expdesc *v) {
-  if (ls->t.token == TK_NAME && luaX_lookahead(ls) == TK_ARROW) {
+  if (ls->extended && ls->t.token == TK_NAME &&
+      luaX_lookahead(ls) == TK_ARROW) {
     TString *param = ls->t.seminfo.ts;
     int line = ls->linenumber;
     luaX_next(ls);  /* skip parameter name */
-    luaX_next(ls);  /* skip '=>' */
-    lambdaexp(ls, v, &param, 1, 0, line);
+    lambdaexp(ls, v, param, 0, line);
     return 1;
   }
   return 0;
 }
 
 
-static void simpleexp (LexState *ls, expdesc *v) {
+static int simpleexp (LexState *ls, expdesc *v) {
   /* simpleexp -> FLT | INT | STRING | NIL | TRUE | FALSE | ... |
                   constructor | FUNCTION body | suffixedexp */
-  if (isfnname(ls)) {
-    fnlambdaexp(ls, v);
-    return;
-  }
   if (singleparamlambda(ls, v))
-    return;
+    return 0;
   switch (ls->t.token) {
     case TK_FLT: {
       init_exp(v, VKFLT, 0);
@@ -1485,27 +1488,24 @@ static void simpleexp (LexState *ls, expdesc *v) {
       break;
     }
     case TK_DOTS: {  /* vararg */
-      FuncState *fs = ls->fs;
-      check_condition(ls, isvararg(fs->f),
-                      "cannot use '...' outside a vararg function");
-      init_exp(v, VVARARG, luaK_codeABC(fs, OP_VARARG, 0, fs->f->numparams, 1));
+      varargexp(ls, v);
       break;
     }
     case '{' /*}*/: {  /* constructor */
       constructor(ls, v);
-      return;
+      return 0;
     }
     case TK_FUNCTION: {
       luaX_next(ls);
       body(ls, v, 0, ls->linenumber);
-      return;
+      return 0;
     }
     default: {
-      suffixedexp(ls, v);
-      return;
+      return suffixedexp(ls, v);
     }
   }
   luaX_next(ls);
+  return 0;
 }
 
 
@@ -1576,7 +1576,7 @@ static const struct {
 ** subexpr -> (simpleexp | unop subexpr) { binop subexpr }
 ** where 'binop' is any binary operator with a priority higher than 'limit'
 */
-static BinOpr subexpr (LexState *ls, expdesc *v, int limit) {
+static BinOpr subexpr (LexState *ls, expdesc *v, int limit, int *iscall) {
   BinOpr op;
   UnOpr uop;
   enterlevel(ls);
@@ -1584,27 +1584,31 @@ static BinOpr subexpr (LexState *ls, expdesc *v, int limit) {
   if (uop != OPR_NOUNOPR) {  /* prefix (unary) operator? */
     int line = ls->linenumber;
     luaX_next(ls);  /* skip operator */
-    subexpr(ls, v, UNARY_PRIORITY);
+    subexpr(ls, v, UNARY_PRIORITY, iscall);
     luaK_prefix(ls->fs, uop, v, line);
+    *iscall = 0;
   }
-  else simpleexp(ls, v);
+  else *iscall = simpleexp(ls, v);
   /* expand while operators have priorities higher than 'limit' */
   op = getbinopr(ls->t.token);
   while ((ls->t.token == TK_PIPE && 1 > limit) ||
          (op != OPR_NOBINOPR && priority[op].left > limit)) {
     expdesc v2;
     BinOpr nextop;
+    int rhsiscall;
     int line = ls->linenumber;
     if (ls->t.token == TK_PIPE) {
       pipeline(ls, v);
+      *iscall = 1;
       op = getbinopr(ls->t.token);
       continue;
     }
     luaX_next(ls);  /* skip operator */
     luaK_infix(ls->fs, op, v);
     /* read sub-expression with higher priority */
-    nextop = subexpr(ls, &v2, priority[op].right);
+    nextop = subexpr(ls, &v2, priority[op].right, &rhsiscall);
     luaK_posfix(ls->fs, op, v, &v2, line);
+    *iscall = 0;
     op = nextop;
   }
   leavelevel(ls);
@@ -1612,8 +1616,12 @@ static BinOpr subexpr (LexState *ls, expdesc *v, int limit) {
 }
 
 
-static void expr (LexState *ls, expdesc *v) {
-  subexpr(ls, v, 0);
+static int expr (LexState *ls, expdesc *v) {
+  /* Report whether the outermost expression is a call (including an
+     optional call or pipeline), which can stand alone as a statement. */
+  int iscall;
+  subexpr(ls, v, 0, &iscall);
+  return iscall;
 }
 
 /* }==================================================================== */
@@ -2238,46 +2246,22 @@ static void exprstat (LexState *ls) {
   FuncState *fs = ls->fs;
   struct LHS_assign v;
   BinOpr op;
-  suffixedexp(ls, &v.v);
+  int iscall = expr(ls, &v.v);
   if (ls->t.token == '=' || ls->t.token == ',') { /* stat -> assignment ? */
     v.prev = NULL;
     restassign(ls, &v, 1);
   }
   else if ((op = compoundop(ls->t.token)) != OPR_NOBINOPR)
     compoundassign(ls, &v.v, op);
-  else if (ls->t.token == TK_PIPE) {
-    do {
-      pipeline(ls, &v.v);
-    } while (ls->t.token == TK_PIPE);
-  }
   else {  /* stat -> func */
-    Instruction *inst;
-    check_condition(ls, v.v.k == VCALL, "syntax error");
-    inst = &getinstruction(fs, &v.v);
-    SETARG_C(*inst, 1);  /* call statement uses no results */
+    check_condition(ls, iscall, "syntax error");
+    if (v.v.k == VCALL) {
+      Instruction *inst = &getinstruction(fs, &v.v);
+      SETARG_C(*inst, 1);  /* call statement uses no results */
+    }
+    /* Optional calls and ordinary pipelines leave one result, discarded
+       with the other statement temporaries by statement(). */
   }
-}
-
-
-static int canstartpipeexpr (int token) {
-  switch (token) {
-    case TK_FLT: case TK_INT: case TK_STRING:
-    case TK_NIL: case TK_TRUE: case TK_FALSE:
-    case '{': case TK_FUNCTION:
-      return 1;
-    default:
-      return 0;
-  }
-}
-
-
-static void pipeexprstat (LexState *ls) {
-  expdesc v;
-  int oldhad = ls->hadpipeline;
-  ls->hadpipeline = 0;
-  expr(ls, &v);
-  check_condition(ls, ls->hadpipeline, "syntax error");
-  ls->hadpipeline = oldhad;
 }
 
 
@@ -2395,10 +2379,7 @@ static void statement (LexState *ls) {
 #endif
     /* FALLTHROUGH */
     default: {  /* stat -> func | assignment */
-      if (canstartpipeexpr(ls->t.token))
-        pipeexprstat(ls);
-      else
-        exprstat(ls);
+      exprstat(ls);
       break;
     }
   }

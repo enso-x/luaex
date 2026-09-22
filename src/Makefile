@@ -71,8 +71,9 @@ $(LUEX_T): $(LUA_O) $(LUA_A)
 $(LUAC_T): $(LUAC_O) $(LUA_A)
 	$(CC) -o $@ $(LDFLAGS) $(LUAC_O) $(LUA_A) $(LIBS)
 
-test:
+test: $(ALL_T)
 	./$(LUA_T) -v
+	./$(LUEX_T) ../tests/run.lua
 
 clean:
 	$(RM) $(ALL_T) $(ALL_O)
@@ -132,9 +133,9 @@ Darwin macos macosx:
 	$(MAKE) $(ALL) SYSCFLAGS="-DLUA_USE_MACOSX -DLUA_USE_READLINE" SYSLIBS="-lreadline"
 
 mingw:
-	$(MAKE) "LUA_A=lua55.dll" "LUA_T=lua.exe" \
+	$(MAKE) "LUA_A=lua55.dll" "LUA_T=lua.exe" "LUEX_T=luex.exe" \
 	"AR=$(CC) -shared -o" "RANLIB=strip --strip-unneeded" \
-	"SYSCFLAGS=-DLUA_BUILD_AS_DLL" "SYSLIBS=" "SYSLDFLAGS=-s" lua.exe
+	"SYSCFLAGS=-DLUA_BUILD_AS_DLL" "SYSLIBS=" "SYSLDFLAGS=-s" lua.exe luex.exe
 	$(MAKE) "LUAC_T=luac.exe" luac.exe
 
 posix:

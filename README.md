@@ -254,12 +254,183 @@ The following are errors:
   positionally and by name.
 - A positional argument after a named argument.
 - Naming a parameter whose name is duplicated in the declaration.
-- Passing named arguments to a native C function or a callable table/userdata.
-  Those calls remain positional; a Lua wrapper can expose named parameters.
+- Passing named arguments to a native C function without an ExLua signature,
+  or to a callable table/userdata. `Class.new` and adapters returned by `wraps`
+  carry signatures; other native calls remain positional.
 
 `...` and its optional table name are not keyword parameters. Python's
 `*args`/`**kwargs` unpacking, keyword-only parameters, and positional-only
 parameter declarations are not part of this syntax.
+
+### Classes
+
+Classes are tables; instances are tables whose metatable is their class.
+Methods are shared and receive an implicit first parameter, `self`:
+
+```lua
+local class Player
+    constructor(name, hp = 100)
+        self.name = name
+        self.hp = hp
+        self.inventory = {}  -- a fresh table for each instance
+    end
+
+    function damage(amount = 1)
+        self.hp -= amount
+        return self.hp
+    end
+
+    static kind = "player"
+    static function describe(name)
+        return f"Player {name}"
+    end
+end
+
+local player = Player.new(name = "Alex")
+player:damage(amount = 15)
+print(Player.describe(name = player.name))
+```
+
+- `local class Name ... end` declares a local binding. `class Name ... end`
+  assigns a name using the same scope rules as `function Name(...) ... end`.
+- `constructor(...) ... end` defines `Class.__init(self, ...)`. `Class.new(...)`
+  creates the instance, calls its initializer and returns the instance;
+  initializer return values are ignored. Constructor errors and yields propagate.
+- `function method(...) ... end` adds an instance method; call it with `:`.
+  `static function` has no implicit `self`; call it with `.`.
+- `static name = expression` evaluates once when the class is declared.
+  These fields live on the class and are shared, including mutable tables.
+  Initialize per-instance state in the constructor. Static fields are also
+  visible through an instance's ordinary `__index` lookup.
+- Defaults follow the same definition-time rules as other functions.
+  Named arguments work on constructors, instance methods and static functions.
+- A class without an initializer creates an empty instance. Call classes with
+  `Class.new(...)`; the class table itself is not callable.
+
+Single inheritance uses `extends` (an optional `do` can precede the body):
+
+```lua
+local class Admin extends Player
+    constructor(name, level = 1)
+        Admin.super.__init(self, name = name)
+        self.level = level
+    end
+
+    function damage(amount = 1)
+        return Admin.super.damage(self, amount = amount / 2)
+    end
+end
+```
+
+The parent expression runs once. Inherited methods and static fields are found
+through the class table's metatable. `Class.super` refers to the parent.
+A subclass without a constructor uses the parent's initializer but still creates
+an instance of the subclass. A declared constructor calls the parent explicitly
+when needed. `Class.new` captures the selected initializer at declaration time;
+subsequently assigning `Class.__init` does not replace that factory's initializer.
+Lua's raw metamethod lookup still applies: special instance metamethods such as
+`__tostring` must be declared on the concrete class to take effect.
+
+The class body accepts constructors, methods, static functions and static fields.
+Duplicate members and the reserved names `new`, `super`, `__index`, `__init`
+are rejected (`constructor` is the spelling for declaring `__init`). There are
+no visibility modifiers, automatic properties or multiple inheritance.
+`class`, `extends`, `static` and `constructor` remain contextual identifiers.
+
+### Decorators
+
+Place `@expression` before a function or class declaration, or before a class
+method, static function or constructor:
+
+```lua
+local function logged(fn)
+    return wraps(fn, (...) => do
+        print("calling function")
+        return fn(...)
+    end)
+end
+
+@logged
+local function add(left, right = 1)
+    return left + right
+end
+
+add(right = 3, left = 2)  -- 5
+```
+
+Decorator factories can accept named arguments, for example `@cached(ttl = 10)`.
+The expressions are evaluated once, top to bottom, before creating the function
+or class. Their results are applied bottom to top, each with the previous result
+as its single positional argument: `@a @b` produces `a(b(value))`. Only one return
+value from each decorator is used. The final result becomes the declared binding.
+A decorator can return its input unchanged, for example to register an event
+handler. Plain function assignments such as `@logged function object:method(...)`
+are supported too. Decorators do not apply to arbitrary variable declarations.
+
+`wraps(original, wrapper)` creates a forwarding adapter with the original
+function's parameter names and defaults. It does not mutate either argument.
+Use it when a decorator's wrapper forwards positional arguments to the original;
+a bare `function(...)` has no named parameters to match. Both inputs must be
+functions, and the original must have a Lua/ExLua signature. Multiple layers of
+`wraps` retain the effective signature. Lambdas and `Class.new` are supported.
+The adapter preserves multiple results, errors and coroutine yields. It retains
+the original closure so its signature and defaults remain alive.
+
+`wraps` and `Class.new` return C adapters. Like other C functions, these adapters
+cannot themselves be passed to `string.dump`; dump/load the enclosing ExLua chunk
+to recreate them. Lua methods and plain decorated Lua closures can still be dumped
+under the normal upvalue/default limitations described below.
+
+### Template Strings
+
+Use `f"...{expression}..."` or `f'...{expression}...'`:
+
+```lua
+local message = f"Player {player.name}, HP: {player.hp}"
+local status = f"Enabled: {false}, missing: {nil}"
+local braces = f"{{literal braces}}, value: {1 + 2}"
+```
+
+Each hole is a full ExLua expression in the surrounding lexical scope. It is
+evaluated once and immediately converted with `tostring`, in left-to-right order,
+including `__tostring` metamethods. Only the first result of a hole is used.
+`tostring` follows normal lexical lookup, so a local replacement is respected.
+Templates always yield one string value.
+
+Double braces `{{` and `}}` produce literal braces. Normal Lua short-string
+escapes work, including Unicode, escaped newlines and embedded zero bytes.
+Expressions may span lines, contain comments or table constructors, and contain
+nested templates (up to 32 levels). Literal newlines in the text part require
+escaping as in Lua short strings. Empty holes, unmatched braces and Python-style
+format specifiers such as `{value:.2f}` are not supported; use
+`f"{string.format('%.2f', value)}"` for formatting.
+
+The `f` must touch the quote. In ordinary `.lua` sources, `f"text"` keeps its
+existing meaning: calling the function `f` with a string argument.
+
+### Destructuring
+
+Local declarations can extract named fields with `{...}` and array positions
+with `[...]`, starting at index 1. `field: binding` renames a field, and either
+kind of pattern can be nested:
+
+```lua
+local {x, y: height} = position
+local [first, second] = items
+local {profile: {name}, coordinates: [px, py]} = user
+```
+
+The source expression runs once and supplies one value. Fields are read in
+source order using ordinary indexing, including `__index`. A nested field is
+read once before its children. Missing leaves become `nil`; destructuring a
+missing nested object raises the usual indexing error. `false` is preserved.
+Bindings become visible after the whole declaration, so `local {x} = x` reads
+the outer `x`. Captures, block scope and later assignment work like regular locals.
+Trailing commas are accepted; duplicate binding names are rejected.
+
+This version supports local binding patterns. Reassignment patterns, parameter
+patterns, rest/spread and defaults inside a pattern are not implemented. Use
+`??` on the source or on an extracted value when a fallback is needed.
 
 ## File Extension
 
@@ -314,13 +485,32 @@ with their defaults. A separately dumped function can still be called with
 all defaulted parameters supplied explicitly; attempting to use a lost default
 raises an explanatory error.
 
+Classes, decorators, template strings and destructuring introduce no new VM
+instructions or binary format changes beyond format 1. Classes lower to member
+tables plus `exlua.class(table, parent)`; templates lower to `tostring` calls and
+concatenation. `exlua.class` and `wraps` are installed by the base library
+(`luaopen_base` / `luaL_openlibs`). An embedder using a custom `_ENV` must provide
+`exlua` for class declarations and `tostring` for template holes. Ordinary method
+calls and destructuring use the existing VM operations.
+
+The additive C API `lua_setsignature(L, adapter_index, source_index, skip)` attaches
+a Lua signature to a C closure. `skip` is a nonnegative count of leading source
+parameters supplied by the adapter; it is added to an existing adapter's offset.
+The destination must be a C closure with upvalues, not a light C function. It
+returns 1 on success, or 0 (without changing the destination) if the source has no
+signature or the offset exceeds its parameter count. This affects named argument
+binding only; the C function remains responsible for forwarding positional calls.
+All existing C API entry points remain available. Rebuild native modules against
+the ExLua headers/library; internal closure layouts are not stock-Lua compatible.
+
 Current limitations:
 
 - ExLua is a language fork, not a Lua standard feature.
 - Tooling support is provided by ExLua-specific packages.
 - Some semantic analysis for new operators is still intentionally conservative in LuexLS.
 - Companion grammars and editor integrations need updates for the new file
-  extensions, named arguments, defaults, and `(...) =>` spelling; their
+  extensions, named arguments, defaults, classes, decorators, template strings,
+  destructuring, and `(...) =>` spelling; their
   repositories are separate from this interpreter change.
 
 ## License

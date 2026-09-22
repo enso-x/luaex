@@ -50,7 +50,8 @@ static const char *const luaX_tokens [] = {
     "//", "..", "...", "==", ">=", "<=", "~=",
     "<<", ">>", "+=", "-=", "*=", "/=", "??", "?.", "|>", "=>",
     "::", "<eof>",
-    "<number>", "<integer>", "<name>", "<string>"
+    "<number>", "<integer>", "<name>", "<string>",
+    "<template segment>", "<template end>"
 };
 
 
@@ -210,6 +211,7 @@ void luaX_setinput (lua_State *L, LexState *ls, ZIO *z, TString *source,
   ls->lastline = 1;
   ls->source = source;
   ls->extended = sourceisextended(source);
+  ls->ntemplates = 0;
   /* all three strings here ("_ENV", "break", "global") were fixed,
      so they cannot be collected */
   ls->envn = luaS_newliteral(L, LUA_ENV);  /* get env string */
@@ -427,9 +429,25 @@ static int readdecesc (LexState *ls) {
 }
 
 
-static void read_string (LexState *ls, int del, SemInfo *seminfo) {
-  save_and_next(ls);  /* keep delimiter (for error messages) */
+static int read_string (LexState *ls, int del, SemInfo *seminfo,
+                        int templ, int first) {
+  save(ls, del);  /* keep delimiter (for error messages) */
+  if (first) next(ls);
   while (ls->current != del) {
+    if (templ && (ls->current == '{' || ls->current == '}')) {
+      int brace = ls->current;
+      next(ls);
+      if (ls->current == brace) {  /* doubled braces are literal */
+        save_and_next(ls);
+        continue;
+      }
+      if (brace == '}')
+        lexerror(ls, "single '}' in template string", 0);
+      seminfo->ts = luaX_newstring(ls, luaZ_buffer(ls->buff) + 1,
+                                      luaZ_bufflen(ls->buff) - 1);
+      ls->templates[ls->ntemplates - 1].text = 0;
+      return TK_FSTRING;
+    }
     switch (ls->current) {
       case EOZ:
         lexerror(ls, "unfinished string", TK_EOS);
@@ -487,11 +505,19 @@ static void read_string (LexState *ls, int del, SemInfo *seminfo) {
   save_and_next(ls);  /* skip delimiter */
   seminfo->ts = luaX_newstring(ls, luaZ_buffer(ls->buff) + 1,
                                    luaZ_bufflen(ls->buff) - 2);
+  if (templ) {
+    ls->ntemplates--;
+    return TK_FEND;
+  }
+  return TK_STRING;
 }
 
 
 static int llex (LexState *ls, SemInfo *seminfo) {
   luaZ_resetbuffer(ls->buff);
+  if (ls->ntemplates && ls->templates[ls->ntemplates - 1].text)
+    return read_string(ls, ls->templates[ls->ntemplates - 1].delimiter,
+                       seminfo, 1, 0);
   for (;;) {
     switch (ls->current) {
       case '\n': case '\r': {  /* line breaks */
@@ -588,8 +614,7 @@ static int llex (LexState *ls, SemInfo *seminfo) {
         else return ':';
       }
       case '"': case '\'': {  /* short literal strings */
-        read_string(ls, ls->current, seminfo);
-        return TK_STRING;
+        return read_string(ls, ls->current, seminfo, 0, 1);
       }
       case '.': {  /* '.', '..', '...', or number */
         save_and_next(ls);
@@ -606,6 +631,8 @@ static int llex (LexState *ls, SemInfo *seminfo) {
         return read_numeral(ls, seminfo);
       }
       case EOZ: {
+        if (ls->ntemplates)
+          lexerror(ls, "unfinished template expression", 0);
         return TK_EOS;
       }
       default: {
@@ -614,6 +641,18 @@ static int llex (LexState *ls, SemInfo *seminfo) {
           do {
             save_and_next(ls);
           } while (lislalnum(ls->current));
+          if (ls->extended && luaZ_bufflen(ls->buff) == 1 &&
+              luaZ_buffer(ls->buff)[0] == 'f' &&
+              (ls->current == '"' || ls->current == '\'')) {
+            int n = ls->ntemplates++;
+            if (n >= 32)
+              lexerror(ls, "too many nested template strings (limit is 32)", 0);
+            ls->templates[n].delimiter = ls->current;
+            ls->templates[n].braces = 0;
+            ls->templates[n].text = 1;
+            luaZ_resetbuffer(ls->buff);
+            return read_string(ls, ls->current, seminfo, 1, 1);
+          }
           /* find or create string */
           ts = luaS_newlstr(ls->L, luaZ_buffer(ls->buff),
                                    luaZ_bufflen(ls->buff));
@@ -627,6 +666,15 @@ static int llex (LexState *ls, SemInfo *seminfo) {
         else {  /* single-char tokens ('+', '*', '%', '{', '}', ...) */
           int c = ls->current;
           next(ls);
+          if (ls->ntemplates) {
+            int n = ls->ntemplates - 1;
+            if (c == '{') ls->templates[n].braces++;
+            else if (c == '}') {
+              if (ls->templates[n].braces == 0)
+                ls->templates[n].text = 1;
+              else ls->templates[n].braces--;
+            }
+          }
           return c;
         }
       }

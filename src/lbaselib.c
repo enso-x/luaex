@@ -513,6 +513,91 @@ static int luaB_tostring (lua_State *L) {
 }
 
 
+/* A forwarding adapter keeps the original signature without mutating the
+   wrapper. Continuations preserve coroutine yields and multiple results. */
+static int wraps_finish (lua_State *L, int status, lua_KContext ctx) {
+  (void)status; (void)ctx;
+  return lua_gettop(L);
+}
+
+
+static int wraps_call (lua_State *L) {
+  int n = lua_gettop(L);
+  lua_pushvalue(L, lua_upvalueindex(1));
+  lua_insert(L, 1);
+  lua_callk(L, n, LUA_MULTRET, 0, wraps_finish);
+  return wraps_finish(L, LUA_OK, 0);
+}
+
+
+static int luaB_wraps (lua_State *L) {
+  luaL_checktype(L, 1, LUA_TFUNCTION);
+  luaL_checktype(L, 2, LUA_TFUNCTION);
+  lua_settop(L, 2);
+  lua_pushvalue(L, 2);
+  lua_pushcclosure(L, wraps_call, 1);
+  luaL_argcheck(L, lua_setsignature(L, -1, 1, 0), 1,
+                "function has no Lua parameter signature");
+  return 1;
+}
+
+
+static int class_finish (lua_State *L, int status, lua_KContext ctx) {
+  (void)status; (void)ctx;
+  lua_settop(L, 1);  /* return the instance, ignoring initializer results */
+  return 1;
+}
+
+
+static int class_new (lua_State *L) {
+  int n = lua_gettop(L);
+  luaL_checkstack(L, 3, "too many constructor arguments");
+  lua_newtable(L);
+  lua_pushvalue(L, lua_upvalueindex(1));
+  lua_setmetatable(L, -2);
+  lua_insert(L, 1);  /* instance, args... */
+  if (!lua_isnil(L, lua_upvalueindex(2))) {
+    lua_pushvalue(L, lua_upvalueindex(2));
+    lua_insert(L, 2);  /* instance, initializer, args... */
+    lua_pushvalue(L, 1);
+    lua_insert(L, 3);  /* instance, initializer, self, args... */
+    lua_callk(L, n + 1, 0, 0, class_finish);
+  }
+  return class_finish(L, LUA_OK, 0);
+}
+
+
+/* The compiler supplies a fresh member table and an optional parent.
+   All class state remains accessible as ordinary Lua tables. */
+static int luaB_class (lua_State *L) {
+  luaL_checktype(L, 1, LUA_TTABLE);
+  luaL_argexpected(L, lua_isnoneornil(L, 2) || lua_istable(L, 2), 2,
+                   "nil or table");
+  lua_settop(L, 2);
+  lua_pushvalue(L, 1);
+  lua_setfield(L, 1, "__index");
+  if (!lua_isnil(L, 2)) {
+    lua_newtable(L);
+    lua_pushvalue(L, 2);
+    lua_setfield(L, -2, "__index");
+    lua_setmetatable(L, 1);
+    lua_pushvalue(L, 2);
+    lua_setfield(L, 1, "super");
+  }
+  lua_getfield(L, 1, "__init");  /* inherited initializer if none was declared */
+  luaL_argcheck(L, lua_isnil(L, -1) || lua_isfunction(L, -1), 1,
+                "constructor must be a function");
+  lua_pushvalue(L, 1);
+  lua_pushvalue(L, 3);
+  lua_pushcclosure(L, class_new, 2);
+  if (!lua_isnil(L, 3))
+    lua_setsignature(L, -1, 3, 1);  /* 'self' is supplied by class_new */
+  lua_setfield(L, 1, "new");
+  lua_settop(L, 1);
+  return 1;
+}
+
+
 static const luaL_Reg base_funcs[] = {
   {"assert", luaB_assert},
   {"collectgarbage", luaB_collectgarbage},
@@ -537,6 +622,7 @@ static const luaL_Reg base_funcs[] = {
   {"tostring", luaB_tostring},
   {"type", luaB_type},
   {"xpcall", luaB_xpcall},
+  {"wraps", luaB_wraps},
   /* placeholders */
   {LUA_GNAME, NULL},
   {"_VERSION", NULL},
@@ -548,6 +634,10 @@ LUAMOD_API int luaopen_base (lua_State *L) {
   /* open lib into global table */
   lua_pushglobaltable(L);
   luaL_setfuncs(L, base_funcs, 0);
+  lua_newtable(L);
+  lua_pushcfunction(L, luaB_class);
+  lua_setfield(L, -2, "class");
+  lua_setfield(L, -2, "exlua");
   /* set global _G */
   lua_pushvalue(L, -1);
   lua_setfield(L, -2, LUA_GNAME);
@@ -556,4 +646,3 @@ LUAMOD_API int luaopen_base (lua_State *L) {
   lua_setfield(L, -2, "_VERSION");
   return 1;
 }
-

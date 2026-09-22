@@ -606,6 +606,39 @@ LUA_API const char *lua_pushfstring (lua_State *L, const char *fmt, ...) {
 }
 
 
+LUA_API int lua_setsignature (lua_State *L, int funcidx, int sourceidx,
+                             int skip) {
+  TValue *dst, *src;
+  LClosure *sig = NULL;
+  CClosure *adapter;
+  lua_lock(L);
+  dst = index2value(L, funcidx);
+  src = index2value(L, sourceidx);
+  api_check(L, ttisCclosure(dst), "signature destination must be a C closure");
+  api_check(L, skip >= 0, "negative signature offset");
+  if (ttisLclosure(src))
+    sig = clLvalue(src);
+  else if (ttisCclosure(src) && clCvalue(src)->signature != NULL) {
+    sig = clCvalue(src)->signature;
+    if (skip > sig->p->numparams - clCvalue(src)->sigskip) {
+      lua_unlock(L);
+      return 0;
+    }
+    skip += clCvalue(src)->sigskip;
+  }
+  if (sig == NULL || skip > sig->p->numparams) {
+    lua_unlock(L);
+    return 0;
+  }
+  adapter = clCvalue(dst);
+  adapter->signature = sig;
+  adapter->sigskip = cast_byte(skip);
+  luaC_objbarrier(L, adapter, sig);
+  lua_unlock(L);
+  return 1;
+}
+
+
 LUA_API void lua_pushcclosure (lua_State *L, lua_CFunction fn, int n) {
   lua_lock(L);
   if (n == 0) {
@@ -1469,5 +1502,4 @@ LUA_API void lua_upvaluejoin (lua_State *L, int fidx1, int n1,
   *up1 = *up2;
   luaC_objbarrier(L, f1, *up1);
 }
-
 

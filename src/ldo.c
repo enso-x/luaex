@@ -685,11 +685,17 @@ void luaD_namedargs (lua_State *L, StkId func, int npos, int nnamed) {
   Proto *p;
   TString *descriptor;
   const char *name, *end;
-  int i, nout;
-  if (!ttisLclosure(s2v(func)))
+  int i, nout, skip = 0, nparams;
+  if (ttisLclosure(s2v(func)))
+    cl = clLvalue(s2v(func));
+  else if (ttisCclosure(s2v(func)) && clCvalue(s2v(func))->signature) {
+    cl = clCvalue(s2v(func))->signature;
+    skip = clCvalue(s2v(func))->sigskip;
+  }
+  else
     luaG_runerror(L, "named arguments require a Lua function");
-  cl = clLvalue(s2v(func));
   p = cl->p;
+  nparams = p->numparams - skip;
   descriptor = tsvalue(s2v(func + 1 + npos + nnamed));
   name = getstr(descriptor);
   end = name + tsslen(descriptor);
@@ -699,8 +705,8 @@ void luaD_namedargs (lua_State *L, StkId func, int npos, int nnamed) {
     int j, found = -1;
     if (next == NULL)
       luaG_runerror(L, "invalid named argument descriptor");
-    for (j = 0; j < p->numparams; j++) {
-      TString *param = p->paramnames[j];
+    for (j = 0; j < nparams; j++) {
+      TString *param = p->paramnames[j + skip];
       if (tsslen(param) == cast_sizet(next - name) &&
           memcmp(getstr(param), name, next - name) == 0) {
         if (found >= 0)
@@ -718,14 +724,14 @@ void luaD_namedargs (lua_State *L, StkId func, int npos, int nnamed) {
   }
   if (name != end)
     luaG_runerror(L, "invalid named argument descriptor");
-  nout = (npos > p->numparams) ? npos : p->numparams;
+  nout = (npos > nparams) ? npos : nparams;
   checkstackp(L, nout + 1, func);
   /* No allocations after taking these temporary copies. */
   for (i = 0; i < nnamed; i++)
     setobj(L, &values[i], s2v(func + 1 + npos + i));
-  for (i = npos; i < p->numparams; i++) {
+  for (i = npos; i < nparams; i++) {
     if (!seen[i])
-      defaultarg(L, cl, i, s2v(func + 1 + i));
+      defaultarg(L, cl, i + skip, s2v(func + 1 + i));
   }
   for (i = 0; i < nnamed; i++)
     setobj2s(L, func + 1 + slots[i], &values[i]);
@@ -1239,5 +1245,4 @@ TStatus luaD_protectedparser (lua_State *L, ZIO *z, const char *name,
   decnny(L);
   return status;
 }
-
 

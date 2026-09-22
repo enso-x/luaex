@@ -1,4 +1,4 @@
-# Makefile for installing Lua
+# Makefile for installing ExLua
 # See doc/readme.html for installation and customization instructions.
 
 # == CHANGE THE SETTINGS BELOW TO SUIT YOUR ENVIRONMENT =======================
@@ -39,7 +39,7 @@ RM= rm -f
 PLATS= guess aix bsd c89 freebsd generic ios linux macosx mingw posix solaris
 
 # What to install.
-TO_BIN= lua luex luac
+TO_BIN= exlua lua luex luac
 TO_INC= lua.h luaconf.h lualib.h lauxlib.h lua.hpp
 TO_LIB= liblua.a
 TO_MAN= lua.1 luac.1

@@ -1,7 +1,7 @@
 -- Run with `make test`. This runner is ordinary Lua; test chunks opt in by name.
 local count = 0
 local function check(name, source, ...)
-    local chunk, err = load(source, '@' .. name .. '.luex')
+    local chunk, err = load(source, '@' .. name .. '.exlua')
     assert(chunk, err)
     local actual, expected = table.pack(chunk()), table.pack(...)
     assert(actual.n == expected.n, name .. ': wrong number of results: ' .. actual.n)
@@ -14,7 +14,7 @@ local function check(name, source, ...)
 end
 
 local function rejects(name, source, chunkname, message)
-    local chunk, err = load(source, chunkname or '@rejected.luex')
+    local chunk, err = load(source, chunkname or '@rejected.exlua')
     assert(not chunk, name .. ': unexpectedly compiled')
     if message then
         assert(err:find(message, 1, true), name .. ': unexpected error: ' .. err)
@@ -267,12 +267,27 @@ for _, source in ipairs({
 }) do
     rejects('ordinary Lua rejects ' .. source, source, '@compat.lua')
 end
-rejects('named Lua chunk rejects extensions', 'return nil ?? 1', 'compat.lua', '.luex')
+rejects('named Lua chunk rejects extensions', 'return nil ?? 1', 'compat.lua', '.exlua')
 assert(assert(load('return (() => 42)()'))() == 42)
 count = count + 1
 
 local testdir = arg[0]:match('^(.*[/\\])') or './'
+dofile(testdir .. 'named.lua')(check, rejects)
+assert(_VERSION == 'ExLua 5.5')
+for _, extension in ipairs({'.exlua', '.exl', '.luex'}) do
+    local chunk = assert(load('return ((x = 42) => x)()', '@example' .. extension))
+    assert(chunk() == 42)
+    count = count + 1
+end
+local oldpath = package.path
+package.path = oldpath:gsub('%.[/\\]', function() return testdir .. 'modules/' end)
+for _, name in ipairs({'exlua_module', 'exl_module', 'legacy_module',
+                      'exlua_package', 'exl_package'}) do
+    assert(require(name) == 42)
+    count = count + 1
+end
+package.path = oldpath
 assert(dofile(testdir .. 'compat.lua'))
 count = count + 1
-dofile(testdir .. '../test.luex')
+dofile(testdir .. '../test.exlua')
 print(('Passed %d regression checks and the feature examples.'):format(count))

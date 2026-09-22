@@ -105,6 +105,8 @@ LUAI_DDEF const lu_byte luaP_opmodes[NUM_OPCODES] = {
  ,opmode(0, 0, 0, 0, 1, iABC)		/* OP_GETVARG */
  ,opmode(0, 0, 0, 0, 0, iABx)		/* OP_ERRNNIL */
  ,opmode(0, 0, 1, 0, 1, iABC)		/* OP_VARARGPREP */
+ ,opmode(0, 1, 0, 0, 0, iABC)		/* OP_NAMEDARGS */
+ ,opmode(0, 0, 0, 0, 0, iABC)		/* OP_SETDEFAULTS */
  ,opmode(0, 0, 0, 0, 0, iAx)		/* OP_EXTRAARG */
 };
 
@@ -117,7 +119,7 @@ LUAI_DDEF const lu_byte luaP_opmodes[NUM_OPCODES] = {
 int luaP_isOT (Instruction i) {
   OpCode op = GET_OPCODE(i);
   switch (op) {
-    case OP_TAILCALL: return 1;
+    case OP_TAILCALL: case OP_NAMEDARGS: return 1;
     default:
       return testOTMode(op) && GETARG_C(i) == 0;
   }

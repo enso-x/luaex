@@ -602,6 +602,7 @@ typedef struct AbsLineInfo {
 typedef struct Proto {
   CommonHeader;
   lu_byte numparams;  /* number of fixed (named) parameters */
+  lu_byte numdefaults;  /* trailing parameters with definition-time defaults */
   lu_byte flag;
   lu_byte maxstacksize;  /* number of registers needed by this function */
   int sizeupvalues;  /* size of 'upvalues' */
@@ -610,6 +611,7 @@ typedef struct Proto {
   int sizelineinfo;
   int sizep;  /* size of 'p' */
   int sizelocvars;
+  int sizeparamnames;  /* runtime signature; retained when debug info is stripped */
   int sizeabslineinfo;  /* size of 'abslineinfo' */
   int linedefined;  /* debug information  */
   int lastlinedefined;  /* debug information  */
@@ -620,6 +622,7 @@ typedef struct Proto {
   ls_byte *lineinfo;  /* information about source lines (debug information) */
   AbsLineInfo *abslineinfo;  /* idem */
   LocVar *locvars;  /* information about local variables (debug information) */
+  TString **paramnames;
   TString  *source;  /* used for debug information */
   GCObject *gclist;
 } Proto;
@@ -706,6 +709,7 @@ typedef struct CClosure {
 typedef struct LClosure {
   ClosureHeader;
   struct Proto *p;
+  struct Table *defaults;  /* evaluated defaults, shared between calls */
   UpVal *upvals[1];  /* list of upvalues */
 } LClosure;
 

@@ -1,27 +1,28 @@
-# LuaEx 5.5.0
+# ExLua 5.5.0
 
-LuaEx is an extended Lua fork based on Lua 5.5.0. It keeps Lua's runtime model and standard library, while adding a small set of syntax features aimed at cleaner data-oriented and functional-style code.
+ExLua is an extended Lua fork based on Lua 5.5.0. It keeps Lua's runtime model and standard library, while adding a small set of syntax features aimed at cleaner data-oriented and functional-style code.
 
-LuaEx source files use the `.luex` extension and are executed with the `luex` command:
+ExLua source files use `.exlua` (recommended) or `.exl` and are executed with
+the `exlua` command. Legacy `.luex` files and the `luex` command remain supported:
 
 ```sh
-luex file.luex
+exlua file.exlua
 ```
 
-The project preserves the original Lua copyright and license. LuaEx modifications are copyright (C) 2026 enso-x.
+The project preserves the original Lua copyright and license. ExLua modifications are copyright (C) 2026 enso-x.
 
 ## Build and Test
 
 ```sh
 make linux       # or make macosx / make mingw
 make test
-make install     # installs lua, luex, and luac; may require a writable INSTALL_TOP
+make install     # installs exlua, lua, luex, and luac
 ```
 
 For a local installation, use `make install INSTALL_TOP="$HOME/.local"`.
-The MinGW build produces `lua.exe`, `luex.exe`, and `luac.exe`.
+The MinGW build produces `exlua.exe`, `lua.exe`, `luex.exe`, and `luac.exe`.
 `make test` runs the regression suite in `tests/run.lua` and the feature examples
-in `test.luex`, and exits unsuccessfully if a check fails.
+in `test.exlua`, and exits unsuccessfully if a check fails.
 
 ## Goals
 
@@ -29,13 +30,13 @@ in `test.luex`, and exits unsuccessfully if a check fails.
 - Add syntax that compiles naturally to ordinary Lua behavior.
 - Keep `false` and `nil` semantics explicit.
 - Make nested data access, pipelines, and callbacks less noisy.
-- Keep regular `.lua` code separate from extended `.luex` code.
+- Keep regular `.lua` code separate from extended `.exlua` code.
 
 ## Added Syntax
 
 ### Compound Assignment
 
-LuaEx supports `+=`, `-=`, `*=`, and `/=` for assignable variables and fields.
+ExLua supports `+=`, `-=`, `*=`, and `/=` for assignable variables and fields.
 
 ```lua
 x += 1
@@ -151,7 +152,7 @@ example when it begins with `-` or `(`.
 
 ### Lambda Expressions
 
-LuaEx adds expression lambdas with `=>`.
+ExLua adds expression lambdas with `=>`.
 
 Single-argument shorthand:
 
@@ -197,25 +198,90 @@ local pair = (a, b) => do return a, b end
 The old `fn(a, b) => ...` spelling has been replaced by `(a, b) => ...`.
 `fn` is an ordinary identifier and can be called or passed as a callback.
 
+### Named Arguments and Default Parameters
+
+Ordinary functions and arrow functions accept arguments by parameter name,
+using Python-style `name = value` syntax. Named arguments can appear in any
+order, after any positional arguments:
+
+```lua
+local function rectangle(width, height = 10, filled = true)
+    return width * height, filled
+end
+
+rectangle(height = 20, width = 5)  -- 100, true
+rectangle(5, filled = false)      -- 50, false
+
+local scale = (value, factor = 2) => value * factor
+scale(factor = 3, value = 10)     -- 30
+10 |> scale(factor = 3)          -- 30
+
+local describe = (name = "world") => do
+    return "Hello, " .. name
+end
+describe()                       -- "Hello, world"
+```
+
+Names are matched against the function actually called, including functions
+stored in variables, tables, or returned by other functions. Methods support
+named arguments too; `object:method(...)` supplies `self` positionally.
+Optional calls skip all argument expressions when the function is `nil`.
+Parameter names are retained even in stripped ExLua bytecode.
+
+Argument expressions run once, in source order. Each named value supplies one
+value. A final positional call or `...` expands multiple values using ordinary
+Lua rules; an expression before a named argument supplies only one value.
+
+Defaults must follow parameters without defaults. They are evaluated once in
+the enclosing scope when the function is created, as in Python. They do not
+refer to the new function's parameters. A mutable default is shared by calls
+to that closure; a new closure gets its own defaults:
+
+```lua
+local add = (value, items = {}) => do
+    items[#items + 1] = value
+    return items
+end
+```
+
+An explicitly supplied `nil` or `false` is a value and does not select a
+default. Omitted parameters without defaults still receive `nil`, as in Lua.
+Extra positional arguments keep Lua's usual behavior, including `...`.
+
+The following are errors:
+
+- An unknown name, a repeated named argument, or a parameter supplied both
+  positionally and by name.
+- A positional argument after a named argument.
+- Naming a parameter whose name is duplicated in the declaration.
+- Passing named arguments to a native C function or a callable table/userdata.
+  Those calls remain positional; a Lua wrapper can expose named parameters.
+
+`...` and its optional table name are not keyword parameters. Python's
+`*args`/`**kwargs` unpacking, keyword-only parameters, and positional-only
+parameter declarations are not part of this syntax.
+
 ## File Extension
 
-LuaEx code should be stored in `.luex` files.
+Use `.exlua` for new code, or `.exl` for a shorter filename.
 
 The extension is intentional:
 
 - `.lua` remains regular Lua.
-- `.luex` enables extended LuaEx syntax.
-- Tooling can distinguish Lua and LuaEx files without guessing.
+- `.exlua` and `.exl` enable extended ExLua syntax.
+- `.luex` is accepted for existing projects.
+- Tooling can distinguish Lua and ExLua files without guessing.
 
 File loading selects the dialect from the filename, independently of whether
-the executable is named `lua` or `luex`. Only `.luex` files enable extensions;
-ordinary `.lua` files reject them.
+the executable is named `exlua`, `lua`, or `luex`. Ordinary `.lua` files reject
+extensions. The default `package.path` searches `.exlua` and `.exl` modules
+(including `init` files) as well as legacy `.luex` and ordinary `.lua` modules.
 
 Command-line snippets (`-e`), stdin, the REPL, and anonymous `load` strings
-support LuaEx syntax. Embedders can select the dialect with the chunk name:
+support ExLua syntax. Embedders can select the dialect with the chunk name:
 
 ```lua
-local extended = assert(load("return (x => x * 2)(21)", "@example.luex"))
+local extended = assert(load("return (x => x * 2)(21)", "@example.exlua"))
 local ordinary = assert(load("return 21 * 2", "@example.lua"))
 ```
 
@@ -223,25 +289,40 @@ A non-file chunk name ending in `.lua` also requests ordinary Lua syntax.
 
 ## Tooling
 
-The LuaEx ecosystem currently includes:
+Companion repositories retain their existing names:
 
 - `luaex`: the language/interpreter repository.
-- `tree-sitter-luaex`: a Tree-sitter grammar for LuaEx syntax.
-- `luex-language-server`: LuexLS, a LuaLS fork with LuaEx parser support.
-- `luaex-zed`: a Zed extension that wires LuaEx highlighting and LuexLS into Zed.
+- `tree-sitter-luaex`: a Tree-sitter grammar for ExLua syntax.
+- `luex-language-server`: LuexLS, a LuaLS fork with ExLua parser support.
+- `luaex-zed`: a Zed extension that wires ExLua highlighting and LuexLS into Zed.
 
 ## Compatibility Notes
 
-LuaEx is source-compatible with ordinary Lua code where extended syntax is not used. The runtime remains Lua-like; the added features are syntactic conveniences layered on top of Lua's model.
+ExLua retains ordinary Lua source behavior when extended syntax is not used.
+The C API names, library names, and Lua 5.5 module directories are preserved.
+`_VERSION` and the interpreter banner identify the language as ExLua.
+
+Named arguments and default values add runtime metadata and bytecode
+instructions. **Recompile existing bytecode:** this version uses ExLua binary
+format 1 and rejects stock Lua / earlier format 0 chunks. Stock Lua cannot
+load the new chunks. This does not affect loading ordinary `.lua` source.
+
+`string.dump` preserves parameter names, but does not serialize captured
+default values (which may be arbitrary objects), just as it does not preserve
+captured upvalue values. Dump/load the enclosing chunk to recreate functions
+with their defaults. A separately dumped function can still be called with
+all defaulted parameters supplied explicitly; attempting to use a lost default
+raises an explanatory error.
 
 Current limitations:
 
-- LuaEx is a language fork, not a Lua standard feature.
-- Tooling support is provided by LuaEx-specific packages.
+- ExLua is a language fork, not a Lua standard feature.
+- Tooling support is provided by ExLua-specific packages.
 - Some semantic analysis for new operators is still intentionally conservative in LuexLS.
-- Companion grammars and editor integrations must support the new `(...) =>`
-  spelling; their repositories are separate from this interpreter change.
+- Companion grammars and editor integrations need updates for the new file
+  extensions, named arguments, defaults, and `(...) =>` spelling; their
+  repositories are separate from this interpreter change.
 
 ## License
 
-LuaEx is based on Lua 5.5.0 and follows the Lua license. The original Lua copyright is preserved. LuaEx modifications are copyright (C) 2026 enso-x.
+ExLua is based on Lua 5.5.0 and follows the Lua license. The original Lua copyright is preserved. ExLua modifications are copyright (C) 2026 enso-x.

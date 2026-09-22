@@ -36,6 +36,7 @@ LClosure *luaF_newLclosure (lua_State *L, int nupvals) {
   GCObject *o = luaC_newobj(L, LUA_VLCL, sizeLclosure(nupvals));
   LClosure *c = gco2lcl(o);
   c->p = NULL;
+  c->defaults = NULL;
   c->nupvalues = cast_byte(nupvals);
   while (nupvals--) c->upvals[nupvals] = NULL;
   return c;
@@ -256,6 +257,9 @@ Proto *luaF_newproto (lua_State *L) {
   f->upvalues = NULL;
   f->sizeupvalues = 0;
   f->numparams = 0;
+  f->numdefaults = 0;
+  f->paramnames = NULL;
+  f->sizeparamnames = 0;
   f->flag = 0;
   f->maxstacksize = 0;
   f->locvars = NULL;
@@ -272,6 +276,7 @@ lu_mem luaF_protosize (Proto *p) {
             + cast_uint(p->sizep) * sizeof(Proto*)
             + cast_uint(p->sizek) * sizeof(TValue)
             + cast_uint(p->sizelocvars) * sizeof(LocVar)
+            + cast_uint(p->sizeparamnames) * sizeof(TString*)
             + cast_uint(p->sizeupvalues) * sizeof(Upvaldesc);
   if (!(p->flag & PF_FIXED)) {
     sz += cast_uint(p->sizecode) * sizeof(Instruction);
@@ -291,6 +296,7 @@ void luaF_freeproto (lua_State *L, Proto *f) {
   luaM_freearray(L, f->p, cast_sizet(f->sizep));
   luaM_freearray(L, f->k, cast_sizet(f->sizek));
   luaM_freearray(L, f->locvars, cast_sizet(f->sizelocvars));
+  luaM_freearray(L, f->paramnames, cast_sizet(f->sizeparamnames));
   luaM_freearray(L, f->upvalues, cast_sizet(f->sizeupvalues));
   luaM_free(L, f);
 }

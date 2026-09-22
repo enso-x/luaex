@@ -224,9 +224,17 @@
 
 #if !defined(LUA_PATH_DEFAULT)
 #define LUA_PATH_DEFAULT  \
+		LUA_LDIR"?.exlua;"  LUA_LDIR"?\\init.exlua;" \
+		LUA_LDIR"?.exl;"  LUA_LDIR"?\\init.exl;" \
 		LUA_LDIR"?.luex;"  LUA_LDIR"?\\init.luex;" \
+		LUA_CDIR"?.exlua;"  LUA_CDIR"?\\init.exlua;" \
+		LUA_CDIR"?.exl;"  LUA_CDIR"?\\init.exl;" \
 		LUA_CDIR"?.luex;"  LUA_CDIR"?\\init.luex;" \
+		LUA_SHRDIR"?.exlua;" LUA_SHRDIR"?\\init.exlua;" \
+		LUA_SHRDIR"?.exl;" LUA_SHRDIR"?\\init.exl;" \
 		LUA_SHRDIR"?.luex;" LUA_SHRDIR"?\\init.luex;" \
+		".\\?.exlua;" ".\\?\\init.exlua;" \
+		".\\?.exl;" ".\\?\\init.exl;" \
 		".\\?.luex;" ".\\?\\init.luex;" \
 		LUA_LDIR"?.lua;"  LUA_LDIR"?\\init.lua;" \
 		LUA_CDIR"?.lua;"  LUA_CDIR"?\\init.lua;" \
@@ -249,8 +257,14 @@
 
 #if !defined(LUA_PATH_DEFAULT)
 #define LUA_PATH_DEFAULT  \
+		LUA_LDIR"?.exlua;"  LUA_LDIR"?/init.exlua;" \
+		LUA_LDIR"?.exl;"  LUA_LDIR"?/init.exl;" \
 		LUA_LDIR"?.luex;"  LUA_LDIR"?/init.luex;" \
+		LUA_CDIR"?.exlua;"  LUA_CDIR"?/init.exlua;" \
+		LUA_CDIR"?.exl;"  LUA_CDIR"?/init.exl;" \
 		LUA_CDIR"?.luex;"  LUA_CDIR"?/init.luex;" \
+		"./?.exlua;" "./?/init.exlua;" \
+		"./?.exl;" "./?/init.exl;" \
 		"./?.luex;" "./?/init.luex;" \
 		LUA_LDIR"?.lua;"  LUA_LDIR"?/init.lua;" \
 		LUA_CDIR"?.lua;"  LUA_CDIR"?/init.lua;" \

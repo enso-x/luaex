@@ -324,6 +324,7 @@ static void loadDebug (LoadState *S, Proto *f) {
 
 
 static void loadFunction (LoadState *S, Proto *f) {
+  int i, n;
   f->linedefined = loadInt(S);
   f->lastlinedefined = loadInt(S);
   f->numparams = loadByte(S);
@@ -332,6 +333,19 @@ static void loadFunction (LoadState *S, Proto *f) {
   if (S->fixed)
     f->flag |= PF_FIXED;  /* signal that code is fixed */
   f->maxstacksize = loadByte(S);
+  f->numdefaults = loadByte(S);
+  n = loadInt(S);
+  if (n != f->numparams || f->numdefaults > f->numparams)
+    error(S, "invalid parameter signature");
+  f->paramnames = luaM_newvectorchecked(S->L, n, TString*);
+  f->sizeparamnames = n;
+  for (i = 0; i < n; i++)
+    f->paramnames[i] = NULL;
+  for (i = 0; i < n; i++) {
+    loadString(S, f, &f->paramnames[i]);
+    if (f->paramnames[i] == NULL)
+      error(S, "missing parameter name");
+  }
   loadCode(S, f);
   loadConstants(S, f);
   loadUpvalues(S, f);

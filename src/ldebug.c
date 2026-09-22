@@ -461,6 +461,10 @@ static int findsetreg (const Proto *p, int lastpc, int reg) {
         change = (reg >= a + 2);
         break;
       }
+      case OP_NAMEDARGS: {  /* binding leaves the callable itself intact */
+        change = (reg > a);
+        break;
+      }
       case OP_CALL:
       case OP_TAILCALL: {  /* affect all registers above base */
         change = (reg >= a);

@@ -1,4 +1,4 @@
--- This file must remain valid in upstream Lua 5.5 as well as LuaEx.
+-- This file must remain valid in upstream Lua 5.5 as well as ExLua.
 local function fn(x) return x + 1 end
 local result = fn(2)
 assert(result == 3)

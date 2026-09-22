@@ -654,7 +654,10 @@ static l_mem traverseproto (global_State *g, Proto *f) {
     markobjectN(g, f->p[i]);
   for (i = 0; i < f->sizelocvars; i++)  /* mark local-variable names */
     markobjectN(g, f->locvars[i].varname);
-  return 1 + f->sizek + f->sizeupvalues + f->sizep + f->sizelocvars;
+  for (i = 0; i < f->sizeparamnames; i++)
+    markobjectN(g, f->paramnames[i]);
+  return 1 + f->sizek + f->sizeupvalues + f->sizep + f->sizelocvars
+           + f->sizeparamnames;
 }
 
 
@@ -672,11 +675,12 @@ static l_mem traverseCclosure (global_State *g, CClosure *cl) {
 static l_mem traverseLclosure (global_State *g, LClosure *cl) {
   int i;
   markobjectN(g, cl->p);  /* mark its prototype */
+  markobjectN(g, cl->defaults);
   for (i = 0; i < cl->nupvalues; i++) {  /* visit its upvalues */
     UpVal *uv = cl->upvals[i];
     markobjectN(g, uv);  /* mark upvalue */
   }
-  return 1 + cl->nupvalues;
+  return 2 + cl->nupvalues;
 }
 
 

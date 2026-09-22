@@ -252,11 +252,16 @@ static void dumpDebug (DumpState *D, const Proto *f) {
 
 
 static void dumpFunction (DumpState *D, const Proto *f) {
+  int i;
   dumpInt(D, f->linedefined);
   dumpInt(D, f->lastlinedefined);
   dumpByte(D, f->numparams);
   dumpByte(D, f->flag);
   dumpByte(D, f->maxstacksize);
+  dumpByte(D, f->numdefaults);
+  dumpInt(D, f->sizeparamnames);
+  for (i = 0; i < f->sizeparamnames; i++)
+    dumpString(D, f->paramnames[i]);
   dumpCode(D, f);
   dumpConstants(D, f);
   dumpUpvalues(D, f);

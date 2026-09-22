@@ -792,9 +792,17 @@ static Proto *addprototype (LexState *ls) {
 
 */
 static void codeclosure (LexState *ls, expdesc *v) {
-  FuncState *fs = ls->fs->prev;
-  init_exp(v, VRELOC, luaK_codeABx(fs, OP_CLOSURE, 0, fs->np - 1));
+  FuncState *child = ls->fs;
+  FuncState *fs = child->prev;
+  init_exp(v, VRELOC, luaK_codeABx(fs, OP_CLOSURE, 0, child->pidx));
   luaK_exp2nextreg(fs, v);  /* fix it at the last register */
+  if (child->f->numdefaults != 0) {
+    luaK_codeABC(fs, OP_SETDEFAULTS, v->u.info, child->defaultbase,
+                 child->f->numdefaults);
+    luaK_codeABC(fs, OP_MOVE, child->defaultbase, v->u.info, 0);
+    fs->freereg = cast_byte(child->defaultbase + 1);
+    v->u.info = child->defaultbase;
+  }
 }
 
 
@@ -802,6 +810,8 @@ static void open_func (LexState *ls, FuncState *fs, BlockCnt *bl) {
   lua_State *L = ls->L;
   Proto *f = fs->f;
   fs->prev = ls->fs;  /* linked list of funcstates */
+  fs->pidx = fs->prev ? fs->prev->np - 1 : 0;
+  fs->defaultbase = 0;
   fs->ls = ls;
   ls->fs = fs;
   fs->pc = 0;
@@ -833,6 +843,13 @@ static void close_func (LexState *ls) {
   lua_State *L = ls->L;
   FuncState *fs = ls->fs;
   Proto *f = fs->f;
+  int i;
+  f->paramnames = luaM_newvectorchecked(L, f->numparams, TString *);
+  f->sizeparamnames = f->numparams;
+  for (i = 0; i < f->sizeparamnames; i++) {
+    f->paramnames[i] = f->locvars[i].varname;
+    luaC_objbarrier(L, f, f->paramnames[i]);
+  }
   luaK_ret(fs, luaY_nvarstack(fs), 0);  /* final return */
   leaveblock(fs);
   lua_assert(fs->bl == NULL);
@@ -1065,7 +1082,7 @@ static void setvararg (FuncState *fs) {
 
 
 static void parlist (LexState *ls) {
-  /* parlist -> [ {NAME ','} (NAME | '...') ] */
+  /* parlist -> [ NAME ['=' expr] {',' NAME ['=' expr]} [',' '...'] ] */
   FuncState *fs = ls->fs;
   Proto *f = fs->f;
   int nparams = 0;
@@ -1076,6 +1093,21 @@ static void parlist (LexState *ls) {
         case TK_NAME: {
           new_localvar(ls, str_checkname(ls));
           nparams++;
+          if (ls->extended && testnext(ls, '=')) {
+            expdesc value;
+            if (f->numdefaults == 0)
+              fs->defaultbase = fs->prev->freereg;
+            /* Defaults belong to the enclosing scope and run once when
+               the closure is created, including nested default closures. */
+            ls->fs = fs->prev;
+            expr(ls, &value);
+            luaK_exp2nextreg(ls->fs, &value);
+            ls->fs = fs;
+            f->numdefaults++;
+          }
+          else
+            check_condition(ls, f->numdefaults == 0,
+                            "parameter without default follows default parameter");
           break;
         }
         case TK_DOTS: {
@@ -1137,23 +1169,88 @@ static int explist (LexState *ls, expdesc *v) {
 }
 
 
+/* Parse a parenthesized call, preserving Lua's final multivalue argument.
+   Named values are single expressions evaluated in their source order. */
+static int callargs (LexState *ls, int base, int line) {
+  FuncState *fs = ls->fs;
+  TString *names[MAX_FSTACK];
+  int nnamed = 0;
+  int npos = fs->freereg - (base + 1);
+  int multret = 0;
+  checknext(ls, '(');
+  if (ls->t.token != ')') {
+    do {
+      expdesc value;
+      if (ls->extended && ls->t.token == TK_NAME &&
+          luaX_lookahead(ls) == '=') {
+        TString *name = ls->t.seminfo.ts;
+        int j;
+        luaY_checklimit(fs, nnamed + 1, MAX_FSTACK, "named arguments");
+        for (j = 0; j < nnamed; j++)
+          check_condition(ls, !eqstr(name, names[j]),
+                          "duplicate named argument");
+        names[nnamed++] = name;
+        luaX_next(ls);  /* name */
+        luaX_next(ls);  /* '=' */
+        expr(ls, &value);
+        luaK_exp2nextreg(fs, &value);
+      }
+      else {
+        check_condition(ls, nnamed == 0,
+                        "positional argument follows named argument");
+        expr(ls, &value);
+        if (ls->t.token != ',' && hasmultret(value.k)) {
+          luaK_setmultret(fs, &value);
+          multret = 1;
+        }
+        else
+          luaK_exp2nextreg(fs, &value);
+        npos++;
+      }
+    } while (testnext(ls, ','));
+  }
+  check(ls, ')');
+  if (nnamed != 0) {
+    /* A NUL-separated string is compact, immutable, and survives stripping.
+       Reuse the lexer's managed buffer so parse errors cannot leak memory. */
+    expdesc descriptor;
+    size_t size = 0;
+    int j;
+    for (j = 0; j < nnamed; j++) {
+      size_t len = tsslen(names[j]) + 1;
+      if (len > MAX_SIZE - size)
+        luaX_syntaxerror(ls, "named argument list too long");
+      size += len;
+    }
+    if (luaZ_sizebuffer(ls->buff) < size)
+      luaZ_resizebuffer(ls->L, ls->buff, size);
+    size = 0;
+    for (j = 0; j < nnamed; j++) {
+      size_t len = tsslen(names[j]) + 1;
+      memcpy(luaZ_buffer(ls->buff) + size, getstr(names[j]), len);
+      size += len;
+    }
+    codestring(&descriptor, luaX_newstring(ls, luaZ_buffer(ls->buff), size));
+    luaK_exp2nextreg(fs, &descriptor);
+    luaK_codeABC(fs, OP_NAMEDARGS, base, npos, nnamed);
+    multret = 1;  /* the binder sets top for CALL/TAILCALL */
+  }
+  check_match(ls, ')', '(', line);
+  return multret ? LUA_MULTRET : npos;
+}
+
+
 static void funcargs (LexState *ls, expdesc *f) {
   FuncState *fs = ls->fs;
   expdesc args;
   int base, nparams;
   int line = ls->linenumber;
+  lua_assert(f->k == VNONRELOC);
+  base = f->u.info;
   switch (ls->t.token) {
-    case '(': {  /* funcargs -> '(' [ explist ] ')' */
-      luaX_next(ls);
-      if (ls->t.token == ')')  /* arg list is empty? */
-        args.k = VVOID;
-      else {
-        explist(ls, &args);
-        if (hasmultret(args.k))
-          luaK_setmultret(fs, &args);
-      }
-      check_match(ls, ')', '(', line);
-      break;
+    case '(': {
+      nparams = callargs(ls, base, line);
+      goto emitcall;
     }
     case '{' /*}*/: {  /* funcargs -> constructor */
       constructor(ls, &args);
@@ -1168,15 +1265,9 @@ static void funcargs (LexState *ls, expdesc *f) {
       luaX_syntaxerror(ls, "function arguments expected");
     }
   }
-  lua_assert(f->k == VNONRELOC);
-  base = f->u.info;  /* base register for call */
-  if (hasmultret(args.k))
-    nparams = LUA_MULTRET;  /* open call */
-  else {
-    if (args.k != VVOID)
-      luaK_exp2nextreg(fs, &args);  /* close last argument */
-    nparams = fs->freereg - (base+1);
-  }
+  luaK_exp2nextreg(fs, &args);
+  nparams = fs->freereg - (base + 1);
+ emitcall:
   init_exp(f, VCALL, luaK_codeABC(fs, OP_CALL, base, nparams+1, 2));
   luaK_fixline(fs, line);
   /* call removes function and arguments and leaves one result (unless
@@ -1212,7 +1303,8 @@ static void primaryexp (LexState *ls, expdesc *v) {
         /* Empty/multiple parameter lists cannot be ordinary Lua expressions.
            Reuse parlist so parameter limits are checked before allocation. */
         if (ls->t.token == ')' ||
-            (ls->t.token == TK_NAME && luaX_lookahead(ls) == ',') ||
+            (ls->t.token == TK_NAME && (luaX_lookahead(ls) == ',' ||
+                                       luaX_lookahead(ls) == '=')) ||
             (ls->t.token == TK_DOTS && luaX_lookahead(ls) == TK_NAME)) {
           lambdaexp(ls, v, NULL, 0, line);
           return;
@@ -1344,7 +1436,6 @@ static void calleeexp (LexState *ls, expdesc *v) {
 
 static void pipelineargs (LexState *ls, expdesc *f, expdesc *first) {
   FuncState *fs = ls->fs;
-  expdesc args;
   int base, nparams, firstreg;
   int line = ls->linenumber;
   lua_assert(first->k == VNONRELOC);
@@ -1352,27 +1443,9 @@ static void pipelineargs (LexState *ls, expdesc *f, expdesc *first) {
   luaK_exp2nextreg(fs, f);
   luaK_reserveregs(fs, 1);
   luaK_codeABC(fs, OP_MOVE, fs->freereg - 1, firstreg, 0);
-  if (testnext(ls, '(')) {
-    if (ls->t.token == ')')
-      args.k = VVOID;
-    else {
-      explist(ls, &args);
-      if (hasmultret(args.k))
-        luaK_setmultret(fs, &args);
-    }
-    check_match(ls, ')', '(', line);
-  }
-  else
-    args.k = VVOID;
   lua_assert(f->k == VNONRELOC);
   base = f->u.info;
-  if (hasmultret(args.k))
-    nparams = LUA_MULTRET;
-  else {
-    if (args.k != VVOID)
-      luaK_exp2nextreg(fs, &args);
-    nparams = fs->freereg - (base + 1);
-  }
+  nparams = (ls->t.token == '(') ? callargs(ls, base, line) : 1;
   luaK_codeABC(fs, OP_CALL, base, nparams + 1, 2);
   luaK_codeABC(fs, OP_MOVE, firstreg, base, 0);
   init_exp(first, VNONRELOC, firstreg);
@@ -2024,12 +2097,17 @@ static void ifstat (LexState *ls, int line) {
 
 
 static void localfunc (LexState *ls) {
-  expdesc b;
+  expdesc b, var;
   FuncState *fs = ls->fs;
   int fvar = fs->nactvar;  /* function's variable index */
   new_localvar(ls, str_checkname(ls));  /* new local variable */
   adjustlocalvars(ls, 1);  /* enter its scope */
-  body(ls, &b, 0, ls->linenumber);  /* function created in next register */
+  /* Reserve the recursive binding before evaluating default expressions. */
+  luaK_nil(fs, fs->freereg, 1);
+  luaK_reserveregs(fs, 1);
+  body(ls, &b, 0, ls->linenumber);
+  init_var(fs, &var, fvar);
+  luaK_storevar(fs, &var, &b);
   /* debug information will only see the variable after this point! */
   localdebuginfo(fs, fvar)->startpc = fs->pc;
 }

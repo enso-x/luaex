@@ -14,8 +14,8 @@
 
 
 #define LUA_COPYRIGHT	LUA_RELEASE "  Copyright (C) 1994-2025 Lua.org, PUC-Rio\n" \
-	"LuaEx modifications Copyright (C) 2026 enso-x"
-#define LUA_AUTHORS	"R. Ierusalimschy, L. H. de Figueiredo, W. Celes; LuaEx: enso-x"
+	"ExLua modifications Copyright (C) 2026 enso-x"
+#define LUA_AUTHORS	"R. Ierusalimschy, L. H. de Figueiredo, W. Celes; ExLua: enso-x"
 
 
 #define LUA_VERSION_MAJOR_N	5
@@ -517,13 +517,13 @@ struct lua_Debug {
 #define LUA_VERSION_MINOR	LUAI_TOSTR(LUA_VERSION_MINOR_N)
 #define LUA_VERSION_RELEASE	LUAI_TOSTR(LUA_VERSION_RELEASE_N)
 
-#define LUA_VERSION	"LuaEx " LUA_VERSION_MAJOR "." LUA_VERSION_MINOR
+#define LUA_VERSION	"ExLua " LUA_VERSION_MAJOR "." LUA_VERSION_MINOR
 #define LUA_RELEASE	LUA_VERSION "." LUA_VERSION_RELEASE
 
 
 /******************************************************************************
 * Copyright (C) 1994-2025 Lua.org, PUC-Rio.
-* LuaEx modifications Copyright (C) 2026 enso-x.
+* ExLua modifications Copyright (C) 2026 enso-x.
 *
 * Permission is hereby granted, free of charge, to any person obtaining
 * a copy of this software and associated documentation files (the

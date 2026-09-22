@@ -67,7 +67,7 @@ typedef struct LexState {
   int current;  /* current character (charint) */
   int linenumber;  /* input line counter */
   int lastline;  /* line of last token 'consumed' */
-  int extended;  /* true for .luex files and anonymous LuaEx chunks */
+  int extended;  /* true for .exlua/.exl files and anonymous ExLua chunks */
   Token t;  /* current token */
   Token lookahead;  /* look ahead token */
   struct FuncState *fs;  /* current function (parser) */

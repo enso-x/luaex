@@ -109,6 +109,8 @@ static const void *const disptab[NUM_OPCODES] = {
 &&L_OP_GETVARG,
 &&L_OP_ERRNNIL,
 &&L_OP_VARARGPREP,
+&&L_OP_NAMEDARGS,
+&&L_OP_SETDEFAULTS,
 &&L_OP_EXTRAARG
 
 };

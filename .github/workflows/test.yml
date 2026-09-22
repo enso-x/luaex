@@ -24,20 +24,30 @@ jobs:
         if: matrix.build == 'sanitized'
         run: >-
           make -j2 linux
-          MYCFLAGS="-O1 -g -DLUAI_ASSERT -fsanitize=address,undefined -fno-omit-frame-pointer"
+          MYCFLAGS="-O1 -g -DLUAI_ASSERT -DHARDSTACKTESTS -DHARDMEMTESTS -fsanitize=address,undefined -fno-omit-frame-pointer"
           MYLDFLAGS="-fsanitize=address,undefined"
       - name: Run regressions and examples
         env:
           ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
           UBSAN_OPTIONS: halt_on_error=1
         run: make test
+      - name: Check stripped bytecode and disassembly
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          ./src/luac -s -o "$RUNNER_TEMP/exlua.luac" test.exlua
+          ./src/luac -l "$RUNNER_TEMP/exlua.luac" > "$RUNNER_TEMP/exlua-bytecode.txt"
+          ./src/exlua "$RUNNER_TEMP/exlua.luac"
       - name: Check installation
         if: matrix.build == 'release'
         run: |
-          make install INSTALL_TOP="$RUNNER_TEMP/luaex-install"
-          "$RUNNER_TEMP/luaex-install/bin/luex" test.luex
-          make uninstall INSTALL_TOP="$RUNNER_TEMP/luaex-install"
-          test ! -e "$RUNNER_TEMP/luaex-install/bin/luex"
+          make install INSTALL_TOP="$RUNNER_TEMP/exlua-install"
+          "$RUNNER_TEMP/exlua-install/bin/exlua" test.exlua
+          "$RUNNER_TEMP/exlua-install/bin/luex" -v
+          make uninstall INSTALL_TOP="$RUNNER_TEMP/exlua-install"
+          test ! -e "$RUNNER_TEMP/exlua-install/bin/exlua"
+          test ! -e "$RUNNER_TEMP/exlua-install/bin/luex"
 
   windows:
     runs-on: windows-latest
@@ -54,4 +64,9 @@ jobs:
       - name: Build MinGW executables
         run: make -j2 mingw MYCFLAGS="-DLUAI_ASSERT"
       - name: Run regressions and examples
-        run: ./src/luex.exe tests/run.lua
+        run: ./src/exlua.exe tests/run.lua
+      - name: Check stripped bytecode and disassembly
+        run: |
+          ./src/luac.exe -s -o test.exluac test.exlua
+          ./src/luac.exe -l test.exluac > /dev/null
+          ./src/exlua.exe test.exluac

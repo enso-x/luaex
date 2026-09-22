@@ -68,8 +68,10 @@ static int sourceisextended (TString *source) {
     s++;
   len = strlen(s);
   if (isfile)
-    return (len >= 5 && strcmp(s + len - 5, ".luex") == 0);
-  /* Command-line, stdin, and dynamically loaded strings retain LuaEx
+    return ((len >= 6 && strcmp(s + len - 6, ".exlua") == 0) ||
+            (len >= 4 && strcmp(s + len - 4, ".exl") == 0) ||
+            (len >= 5 && strcmp(s + len - 5, ".luex") == 0));
+  /* Command-line, stdin, and dynamically loaded strings retain ExLua
      syntax. A chunk name ending in .lua explicitly requests ordinary Lua. */
   return !(len >= 4 && strcmp(s + len - 4, ".lua") == 0);
 }
@@ -139,7 +141,7 @@ static l_noret lexerror (LexState *ls, const char *msg, int token) {
 
 static int extendedtoken (LexState *ls, int token) {
   if (!ls->extended)
-    lexerror(ls, "LuaEx syntax requires a .luex source", token);
+    lexerror(ls, "ExLua syntax requires an .exlua or .exl source", token);
   return token;
 }
 

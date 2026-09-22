@@ -273,6 +273,11 @@ count = count + 1
 
 local testdir = arg[0]:match('^(.*[/\\])') or './'
 dofile(testdir .. 'named.lua')(check, rejects)
+dofile(testdir .. 'objects.lua')(check, rejects)
+dofile(testdir .. 'templates.lua')(check, rejects)
+dofile(testdir .. 'destructuring.lua')(check, rejects)
+assert(dofile(testdir .. 'syntax.lua'))
+count = count + 1
 assert(_VERSION == 'ExLua 5.5')
 for _, extension in ipairs({'.exlua', '.exl', '.luex'}) do
     local chunk = assert(load('return ((x = 42) => x)()', '@example' .. extension))

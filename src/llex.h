@@ -41,7 +41,7 @@ enum RESERVED {
   TK_ADDEQ, TK_SUBEQ, TK_MULEQ, TK_DIVEQ,
   TK_COALESCE, TK_QDOT, TK_PIPE, TK_ARROW,
   TK_DBCOLON, TK_EOS,
-  TK_FLT, TK_INT, TK_NAME, TK_STRING
+  TK_FLT, TK_INT, TK_NAME, TK_STRING, TK_FSTRING, TK_FEND
 };
 
 /* number of reserved words */
@@ -68,6 +68,12 @@ typedef struct LexState {
   int linenumber;  /* input line counter */
   int lastline;  /* line of last token 'consumed' */
   int extended;  /* true for .exlua/.exl files and anonymous ExLua chunks */
+  int ntemplates;
+  struct {
+    int delimiter;
+    int braces;
+    int text;
+  } templates[32];  /* nested template strings; independent of lookahead */
   Token t;  /* current token */
   Token lookahead;  /* look ahead token */
   struct FuncState *fs;  /* current function (parser) */

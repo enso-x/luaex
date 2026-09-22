@@ -702,6 +702,8 @@ typedef struct UpVal {
 typedef struct CClosure {
   ClosureHeader;
   lua_CFunction f;
+  struct LClosure *signature;  /* optional named-argument forwarding signature */
+  lu_byte sigskip;  /* leading parameters supplied by the adapter */
   TValue upvalue[1];  /* list of upvalues */
 } CClosure;
 
@@ -865,4 +867,3 @@ LUAI_FUNC void luaO_chunkid (char *out, const char *source, size_t srclen);
 
 
 #endif
-

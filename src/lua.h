@@ -252,6 +252,9 @@ LUA_API const char *(lua_pushvfstring) (lua_State *L, const char *fmt,
                                                       va_list argp);
 LUA_API const char *(lua_pushfstring) (lua_State *L, const char *fmt, ...);
 LUA_API void  (lua_pushcclosure) (lua_State *L, lua_CFunction fn, int n);
+/* ExLua: copy a Lua signature onto a C closure adapter; return 0 if absent. */
+LUA_API int   (lua_setsignature) (lua_State *L, int funcidx, int sourceidx,
+                                int skip);
 LUA_API void  (lua_pushboolean) (lua_State *L, int b);
 LUA_API void  (lua_pushlightuserdata) (lua_State *L, void *p);
 LUA_API int   (lua_pushthread) (lua_State *L);

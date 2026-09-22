@@ -27,6 +27,8 @@
 CClosure *luaF_newCclosure (lua_State *L, int nupvals) {
   GCObject *o = luaC_newobj(L, LUA_VCCL, sizeCclosure(nupvals));
   CClosure *c = gco2ccl(o);
+  c->signature = NULL;
+  c->sigskip = 0;
   c->nupvalues = cast_byte(nupvals);
   return c;
 }
@@ -317,4 +319,3 @@ const char *luaF_getlocalname (const Proto *f, int local_number, int pc) {
   }
   return NULL;  /* not found */
 }
-

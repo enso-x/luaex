@@ -63,6 +63,7 @@ typedef struct BlockCnt {
 */
 static void statement (LexState *ls);
 static int expr (LexState *ls, expdesc *v);
+static void templateexp (LexState *ls, expdesc *v);
 static void lambdaexp (LexState *ls, expdesc *e, TString *param,
                        int vararg, int line);
 
@@ -1261,6 +1262,10 @@ static void funcargs (LexState *ls, expdesc *f) {
       luaX_next(ls);  /* must use 'seminfo' before 'next' */
       break;
     }
+    case TK_FSTRING: case TK_FEND: {
+      templateexp(ls, &args);
+      break;
+    }
     default: {
       luaX_syntaxerror(ls, "function arguments expected");
     }
@@ -1399,7 +1404,8 @@ static int suffixedexp (LexState *ls, expdesc *v) {
         iscall = 1;
         break;
       }
-      case '(': case TK_STRING: case '{' /*}*/: {  /* funcargs */
+      case '(': case TK_STRING: case TK_FSTRING: case TK_FEND:
+      case '{' /*}*/: {  /* funcargs */
         luaK_exp2nextreg(fs, v);
         funcargs(ls, v);
         iscall = 1;
@@ -1528,12 +1534,50 @@ static int singleparamlambda (LexState *ls, expdesc *v) {
 }
 
 
+/* Template holes are regular expressions in the surrounding scope. Each
+   is evaluated once and converted immediately, in source order. */
+static void templateexp (LexState *ls, expdesc *v) {
+  FuncState *fs = ls->fs;
+  int base = fs->freereg;
+  int line = ls->linenumber;
+  for (;;) {
+    int final = (ls->t.token == TK_FEND);
+    codestring(v, ls->t.seminfo.ts);
+    luaK_exp2nextreg(fs, v);
+    luaX_next(ls);
+    if (final) break;
+    {
+      expdesc convert, value;
+      int callbase = fs->freereg;
+      buildvar(ls, luaX_newstring(ls, "tostring", 8), &convert);
+      luaK_exp2nextreg(fs, &convert);
+      expr(ls, &value);
+      luaK_exp2nextreg(fs, &value);  /* exactly one result per hole */
+      luaK_codeABC(fs, OP_CALL, callbase, 2, 2);
+      fs->freereg = cast_byte(callbase + 1);
+    }
+    checknext(ls, '}');
+    check_condition(ls, ls->t.token == TK_FSTRING || ls->t.token == TK_FEND,
+                    "template segment expected");
+  }
+  if (fs->freereg - base > 1)
+    luaK_codeABC(fs, OP_CONCAT, base, fs->freereg - base, 0);
+  luaK_fixline(fs, line);
+  fs->freereg = cast_byte(base + 1);
+  init_exp(v, VNONRELOC, base);
+}
+
+
 static int simpleexp (LexState *ls, expdesc *v) {
   /* simpleexp -> FLT | INT | STRING | NIL | TRUE | FALSE | ... |
                   constructor | FUNCTION body | suffixedexp */
   if (singleparamlambda(ls, v))
     return 0;
   switch (ls->t.token) {
+    case TK_FSTRING: case TK_FEND: {
+      templateexp(ls, v);
+      return 0;
+    }
     case TK_FLT: {
       init_exp(v, VKFLT, 0);
       v->u.nval = ls->t.seminfo.r;
@@ -2096,6 +2140,109 @@ static void ifstat (LexState *ls, int line) {
 }
 
 
+typedef struct PatternNode {
+  TString *key;  /* NULL for a positional key */
+  TString *name;  /* NULL for a nested pattern */
+  int index;
+  int child;
+  int next;
+  int binding;
+} PatternNode;
+
+
+typedef struct Pattern {
+  PatternNode nodes[MAXVARS];
+  int count;
+  int bindings;
+} Pattern;
+
+
+/* Parse a bounded tree before compiling the RHS. Bindings stay out of
+   scope until every field has been read, just like ordinary local lists. */
+static int bindingpattern (LexState *ls, Pattern *p) {
+  int open = ls->t.token;
+  int close = (open == '{') ? '}' : ']';
+  int first = -1, last = -1, position = 0;
+  enterlevel(ls);
+  luaX_next(ls);
+  while (ls->t.token != close) {
+    int i, n = p->count;
+    PatternNode *node;
+    luaY_checklimit(ls->fs, n + 1, MAXVARS, "destructuring entries");
+    p->count++;
+    node = &p->nodes[n];
+    node->key = node->name = NULL;
+    node->index = ++position;
+    node->child = node->next = -1;
+    if (last >= 0) p->nodes[last].next = n;
+    else first = n;
+    last = n;
+    if (open == '{') {
+      node->key = str_checkname(ls);
+      if (!testnext(ls, ':')) node->name = node->key;
+    }
+    if (node->name == NULL) {
+      if (ls->t.token == '{' || ls->t.token == '[')
+        node->child = bindingpattern(ls, p);
+      else node->name = str_checkname(ls);
+    }
+    if (node->name != NULL) {
+      for (i = 0; i < n; i++)
+        check_condition(ls, !eqstr(p->nodes[i].name, node->name),
+                        "duplicate destructuring binding");
+      node->binding = p->bindings++;
+      new_localvar(ls, node->name);
+    }
+    if (!testnext(ls, ',')) break;
+  }
+  checknext(ls, close);
+  leavelevel(ls);
+  return first;
+}
+
+
+static void extractpattern (LexState *ls, Pattern *p, int node,
+                            int source, int base) {
+  FuncState *fs = ls->fs;
+  for (; node >= 0; node = p->nodes[node].next) {
+    PatternNode *part = &p->nodes[node];
+    expdesc value, key;
+    int temp = fs->freereg;
+    init_exp(&value, VNONRELOC, source);
+    if (part->key != NULL) codestring(&key, part->key);
+    else {
+      init_exp(&key, VKINT, 0);
+      key.u.ival = part->index;
+    }
+    luaK_indexed(fs, &value, &key);
+    luaK_loadvar(fs, &value, &value);  /* preserve the parent for its siblings */
+    luaK_exp2nextreg(fs, &value);
+    if (part->name != NULL)
+      luaK_codeABC(fs, OP_MOVE, base + part->binding, value.u.info, 0);
+    else extractpattern(ls, p, part->child, value.u.info, base);
+    fs->freereg = cast_byte(temp);
+  }
+}
+
+
+static void localpattern (LexState *ls) {
+  FuncState *fs = ls->fs;
+  Pattern pattern;
+  expdesc source;
+  int root, base = fs->freereg;
+  pattern.count = pattern.bindings = 0;
+  root = bindingpattern(ls, &pattern);
+  checknext(ls, '=');
+  luaK_reserveregs(fs, pattern.bindings);
+  /* These slots may be visible to GC while the RHS or __index calls run. */
+  if (pattern.bindings) luaK_nil(fs, base, pattern.bindings);
+  expr(ls, &source);
+  luaK_exp2nextreg(fs, &source);
+  extractpattern(ls, &pattern, root, source.u.info, base);
+  adjustlocalvars(ls, pattern.bindings);
+}
+
+
 static void localfunc (LexState *ls) {
   expdesc b, var;
   FuncState *fs = ls->fs;
@@ -2319,6 +2466,200 @@ static void funcstat (LexState *ls, int line) {
 }
 
 
+typedef struct Decorators {
+  int base;
+  int count;
+} Decorators;
+
+
+static int isword (LexState *ls, const char *word) {
+  return ls->t.token == TK_NAME && strcmp(getstr(ls->t.seminfo.ts), word) == 0;
+}
+
+
+static void readdecorators (LexState *ls, Decorators *d) {
+  d->base = ls->fs->freereg;
+  d->count = 0;
+  while (testnext(ls, '@')) {
+    expdesc value;
+    expr(ls, &value);
+    luaK_exp2nextreg(ls->fs, &value);
+    d->count++;
+  }
+}
+
+
+static void applydecorators (LexState *ls, Decorators *d, expdesc *value) {
+  FuncState *fs = ls->fs;
+  int i, target;
+  if (!d->count) return;
+  luaK_exp2nextreg(fs, value);
+  target = value->u.info;
+  for (i = d->count - 1; i >= 0; i--) {
+    int base = fs->freereg;
+    luaK_reserveregs(fs, 2);
+    luaK_codeABC(fs, OP_MOVE, base, d->base + i, 0);
+    luaK_codeABC(fs, OP_MOVE, base + 1, target, 0);
+    luaK_codeABC(fs, OP_CALL, base, 2, 2);
+    luaK_codeABC(fs, OP_MOVE, target, base, 0);
+    fs->freereg = cast_byte(base);
+  }
+}
+
+
+/* A decorated local comes into scope after the decorator expressions.
+   Move their temporaries up to leave its permanent register below them. */
+static void declarationlocal (LexState *ls, TString *name, Decorators *d,
+                              expdesc *var) {
+  FuncState *fs = ls->fs;
+  int i, slot = luaY_nvarstack(fs), vidx = fs->nactvar;
+  luaK_reserveregs(fs, 1);
+  for (i = d->count - 1; i >= 0; i--)
+    luaK_codeABC(fs, OP_MOVE, d->base + i + 1, d->base + i, 0);
+  d->base++;
+  luaK_nil(fs, slot, 1);
+  new_localvar(ls, name);
+  adjustlocalvars(ls, 1);
+  init_var(fs, var, vidx);
+}
+
+
+static void emptytable (FuncState *fs, expdesc *value) {
+  int reg = fs->freereg;
+  int pc = luaK_codevABCk(fs, OP_NEWTABLE, 0, 0, 0, 0);
+  luaK_code(fs, 0);
+  luaK_reserveregs(fs, 1);
+  luaK_settablesize(fs, pc, reg, 0, 0);
+  init_exp(value, VNONRELOC, reg);
+}
+
+
+static void classstat (LexState *ls, int islocal, Decorators *d, int line) {
+  FuncState *fs = ls->fs;
+  expdesc var, parent, table, value, key;
+  TString *members[MAXVARS];
+  int nmembers = 0, saved, parentreg, tablereg;
+  TString *name;
+  luaX_next(ls);  /* contextual 'class' */
+  name = str_checkname(ls);
+  if (islocal) declarationlocal(ls, name, d, &var);
+  else {
+    buildvar(ls, name, &var);
+    check_readonly(ls, &var);
+  }
+  if (isword(ls, "extends")) {
+    luaX_next(ls);
+    expr(ls, &parent);
+  }
+  else init_exp(&parent, VNIL, 0);
+  luaK_exp2nextreg(fs, &parent);
+  parentreg = parent.u.info;
+  emptytable(fs, &table);
+  tablereg = table.u.info;
+  /* Keep the member table pinned even when storing it in a local/global. */
+  value = table;
+  luaK_exp2nextreg(fs, &value);
+  luaK_storevar(fs, &var, &value);
+  fs->freereg = cast_byte(tablereg + 1);
+  saved = fs->freereg;
+  testnext(ls, TK_DO);
+  while (ls->t.token != TK_END) {
+    Decorators decorators;
+    TString *member;
+    int isstatic = 0, isconstructor = 0, methodline = ls->linenumber;
+    int i;
+    if (testnext(ls, ';')) continue;
+    readdecorators(ls, &decorators);
+    if (isword(ls, "static")) {
+      isstatic = 1;
+      luaX_next(ls);
+    }
+    if (!isstatic && isword(ls, "constructor") && luaX_lookahead(ls) == '(') {
+      isconstructor = 1;
+      luaX_next(ls);
+      member = luaX_newstring(ls, "__init", 6);
+      body(ls, &value, 1, methodline);
+    }
+    else if (testnext(ls, TK_FUNCTION)) {
+      member = str_checkname(ls);
+      body(ls, &value, !isstatic, methodline);
+    }
+    else {
+      check_condition(ls, isstatic && !decorators.count,
+                      "constructor, function, or static member expected");
+      member = str_checkname(ls);
+      checknext(ls, '=');
+      expr(ls, &value);
+    }
+    check_condition(ls, strcmp(getstr(member), "new") != 0 &&
+                        strcmp(getstr(member), "super") != 0 &&
+                        strcmp(getstr(member), "__index") != 0 &&
+                        (isconstructor || strcmp(getstr(member), "__init") != 0),
+                    "reserved class member name");
+    luaY_checklimit(fs, nmembers + 1, MAXVARS, "class members");
+    for (i = 0; i < nmembers; i++)
+      check_condition(ls, !eqstr(member, members[i]), "duplicate class member");
+    members[nmembers++] = member;
+    applydecorators(ls, &decorators, &value);
+    luaK_exp2nextreg(fs, &value);
+    init_exp(&table, VNONRELOC, tablereg);
+    codestring(&key, member);
+    luaK_indexed(fs, &table, &key);
+    if (value.u.info + 1 < fs->freereg) {
+      /* A long constant index needs a key register above the value. Keep
+         it pinned and store from a copy at the top of the register stack. */
+      int copy = fs->freereg;
+      luaK_reserveregs(fs, 1);
+      luaK_codeABC(fs, OP_MOVE, copy, value.u.info, 0);
+      value.u.info = copy;
+    }
+    luaK_storevar(fs, &table, &value);
+    fs->freereg = cast_byte(saved);
+  }
+  check_match(ls, TK_END, TK_NAME, line);
+  /* exlua.class(member_table, parent) installs table-based inheritance
+     and a constructor adapter with the initializer's named signature. */
+  buildvar(ls, luaX_newstring(ls, "exlua", 5), &value);
+  luaK_exp2anyregup(fs, &value);
+  codestring(&key, luaX_newstring(ls, "class", 5));
+  luaK_indexed(fs, &value, &key);
+  luaK_exp2nextreg(fs, &value);
+  saved = value.u.info;
+  luaK_reserveregs(fs, 2);
+  luaK_codeABC(fs, OP_MOVE, saved + 1, tablereg, 0);
+  luaK_codeABC(fs, OP_MOVE, saved + 2, parentreg, 0);
+  luaK_codeABC(fs, OP_CALL, saved, 3, 2);
+  fs->freereg = cast_byte(saved + 1);
+  init_exp(&value, VNONRELOC, saved);
+  applydecorators(ls, d, &value);
+  luaK_storevar(fs, &var, &value);
+  luaK_fixline(fs, line);
+}
+
+
+static void decoratedstat (LexState *ls, int line) {
+  Decorators d;
+  expdesc var, value;
+  int islocal = 0, ismethod = 0;
+  readdecorators(ls, &d);
+  if (testnext(ls, TK_LOCAL)) islocal = 1;
+  if (isword(ls, "class")) {
+    classstat(ls, islocal, &d, line);
+    return;
+  }
+  checknext(ls, TK_FUNCTION);
+  if (islocal) declarationlocal(ls, str_checkname(ls), &d, &var);
+  else {
+    ismethod = funcname(ls, &var);
+    check_readonly(ls, &var);
+  }
+  body(ls, &value, ismethod, line);
+  applydecorators(ls, &d, &value);
+  luaK_storevar(ls->fs, &var, &value);
+  luaK_fixline(ls->fs, line);
+}
+
+
 static void exprstat (LexState *ls) {
   /* stat -> func | assignment */
   FuncState *fs = ls->fs;
@@ -2378,7 +2719,14 @@ static void retstat (LexState *ls) {
 static void statement (LexState *ls) {
   int line = ls->linenumber;  /* may be needed for error messages */
   enterlevel(ls);
-  switch (ls->t.token) {
+  if (ls->extended && ls->t.token == '@')
+    decoratedstat(ls, line);
+  else if (ls->extended && isword(ls, "class") && luaX_lookahead(ls) == TK_NAME) {
+    Decorators d;
+    d.base = ls->fs->freereg; d.count = 0;
+    classstat(ls, 0, &d, line);
+  }
+  else switch (ls->t.token) {
     case ';': {  /* stat -> ';' (empty statement) */
       luaX_next(ls);  /* skip ';' */
       break;
@@ -2413,6 +2761,14 @@ static void statement (LexState *ls) {
       luaX_next(ls);  /* skip LOCAL */
       if (testnext(ls, TK_FUNCTION))  /* local function? */
         localfunc(ls);
+      else if (ls->extended && isword(ls, "class") &&
+               luaX_lookahead(ls) == TK_NAME) {
+        Decorators d;
+        d.base = ls->fs->freereg; d.count = 0;
+        classstat(ls, 1, &d, line);
+      }
+      else if (ls->extended && (ls->t.token == '{' || ls->t.token == '['))
+        localpattern(ls);
       else
         localstat(ls);
       break;

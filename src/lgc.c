@@ -663,9 +663,10 @@ static l_mem traverseproto (global_State *g, Proto *f) {
 
 static l_mem traverseCclosure (global_State *g, CClosure *cl) {
   int i;
+  markobjectN(g, cl->signature);
   for (i = 0; i < cl->nupvalues; i++)  /* mark its upvalues */
     markvalue(g, &cl->upvalue[i]);
-  return 1 + cl->nupvalues;
+  return 2 + cl->nupvalues;
 }
 
 /*
@@ -1804,5 +1805,4 @@ void luaC_fullgc (lua_State *L, int isemergency) {
 }
 
 /* }====================================================== */
-
 

@@ -39,7 +39,7 @@ RM= rm -f
 PLATS= guess aix bsd c89 freebsd generic ios linux macosx mingw posix solaris
 
 # What to install.
-TO_BIN= lua luac
+TO_BIN= lua luex luac
 TO_INC= lua.h luaconf.h lualib.h lauxlib.h lua.hpp
 TO_LIB= liblua.a
 TO_MAN= lua.1 luac.1

@@ -671,9 +671,23 @@ static int nilK (FuncState *fs) {
 }
 
 
-int luaK_jumpifnil (FuncState *fs, expdesc *e) {
+static int codeisnil (FuncState *fs, expdesc *e, int equal) {
   int r = luaK_exp2anyreg(fs, e);
-  return condjump(fs, OP_EQK, r, nilK(fs), 0, 1);
+  int k = nilK(fs);
+  if (k <= MAXARG_B)
+    return condjump(fs, OP_EQK, r, k, 0, equal);
+  else {  /* the constant does not fit in EQK's eight-bit operand */
+    int nilreg = fs->freereg;
+    luaK_reserveregs(fs, 1);
+    luaK_nil(fs, nilreg, 1);
+    freereg(fs, nilreg);
+    return condjump(fs, OP_EQ, r, nilreg, 0, equal);
+  }
+}
+
+
+int luaK_jumpifnil (FuncState *fs, expdesc *e) {
+  return codeisnil(fs, e, 1);
 }
 
 
@@ -1800,8 +1814,8 @@ void luaK_infix (FuncState *fs, BinOpr op, expdesc *v) {
       break;
     }
     case OPR_COALESCE: {
-      luaK_exp2anyreg(fs, v);
-      v->t = condjump(fs, OP_EQK, v->u.info, nilK(fs), 0, 0);
+      luaK_exp2nextreg(fs, v);  /* never overwrite a local on the nil path */
+      v->t = codeisnil(fs, v, 0);
       break;
     }
     case OPR_CONCAT: {
@@ -1883,7 +1897,9 @@ void luaK_posfix (FuncState *fs, BinOpr opr,
     case OPR_COALESCE: {
       int reg = e1->u.info;
       lua_assert(e1->k == VNONRELOC && e1->f == NO_JUMP);
+      freeexp(fs, e2);  /* discard RHS temporaries before reusing the LHS slot */
       exp2reg(fs, e2, reg);
+      lua_assert(fs->freereg == reg + 1);
       luaK_patchtohere(fs, e1->t);
       e1->t = NO_JUMP;
       e1->k = VNONRELOC;
